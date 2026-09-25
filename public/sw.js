@@ -7,12 +7,9 @@ self.addEventListener('push', e => {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const hasFocused = clientList.some(c => c.focused);
     if (hasFocused) return;
-
     await self.registration.showNotification(data.title || 'Новое сообщение', {
       body: data.body || '',
       tag: data.tag || 'msg',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
       data: data.data || {},
       vibrate: [200, 100, 200],
       renotify: true
