@@ -61,9 +61,8 @@ app.post('/unsubscribe', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Данные ----
 let messages = [];
-let knownUsers = {}; // { userId: { name, username, color, initials, avatar, contacts[] } }
+let knownUsers = {};
 let rooms = {};
 try {
   if (fs.existsSync(MESSAGES_FILE)) messages = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
@@ -77,7 +76,6 @@ const saveRooms = () => fs.writeFile(ROOMS_FILE, JSON.stringify(rooms), () => {}
 
 const online = new Map();
 
-// ---- Утилиты ----
 function contactListFor(userId) {
   const u = knownUsers[userId];
   if (!u) return [];
@@ -140,7 +138,6 @@ function ensureContacts(a, b) {
   }
 }
 
-// ---- Socket.IO ----
 io.on('connection', socket => {
   socket.on('join', ({ userId, name, username, color, initials }) => {
     if (!userId || !name || !username) return;
@@ -190,7 +187,6 @@ io.on('connection', socket => {
     io.emit('user-updated', { userId, user: knownUsers[userId] });
   });
 
-  // --- Поиск по @username ---
   socket.on('search-user', ({ query, byUserId }) => {
     const q = String(query || '').replace(/^@/, '').toLowerCase().trim();
     if (!q) { socket.emit('search-result', { query, results: [] }); return; }
@@ -205,7 +201,6 @@ io.on('connection', socket => {
     socket.emit('search-result', { query, results });
   });
 
-  // --- Добавить в контакты ---
   socket.on('add-contact', ({ userId, contactId }) => {
     if (!userId || !contactId || userId === contactId) return;
     if (!knownUsers[userId] || !knownUsers[contactId]) return;
@@ -213,7 +208,6 @@ io.on('connection', socket => {
     socket.emit('contact-added', { userId: contactId });
   });
 
-  // --- Удалить из контактов ---
   socket.on('remove-contact', ({ userId, contactId }) => {
     if (!userId || !contactId) return;
     if (knownUsers[userId]?.contacts) {
@@ -224,7 +218,6 @@ io.on('connection', socket => {
     }
   });
 
-  // --- Сообщения ---
   socket.on('message', msg => {
     if (!msg || !msg.id || !msg.from || !msg.to) return;
     if (messages.some(m => m.id === msg.id)) return;
@@ -239,7 +232,6 @@ io.on('connection', socket => {
       return;
     }
 
-    // Автоматически делаем собеседников контактами
     if (!isPublic && !isRoom) ensureContacts(msg.from, msg.to);
 
     let recipients;
@@ -317,7 +309,6 @@ io.on('connection', socket => {
     emitToUsers(recipients, 'typing', { to, from, fromName });
   });
 
-  // --- Создание группы/канала ---
   socket.on('create-room', ({ name, type, description, creator, inviteUsernames }) => {
     if (!name || !type || !creator) return;
     if (type !== 'group' && type !== 'channel') return;
