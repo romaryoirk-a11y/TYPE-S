@@ -37,9 +37,7 @@
     background: #05060d; color: var(--text); padding: 20px;
     position: relative;
   }
-  @supports not (height: 100dvh) {
-    body { height: 100vh; }
-  }
+  @supports not (height: 100dvh) { body { height: 100vh; } }
   body::before {
     content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
     background:
@@ -89,7 +87,6 @@
   .input-hint { font-size: 12px; color: var(--text-mute); margin-top: 6px; }
   .input-hint.ok { color: var(--success); }
   .input-hint.err { color: var(--danger); }
-  .input-hint.info { color: var(--accent); }
 
   .modal-card .primary-btn {
     width: 100%; margin-top: 20px; padding: 14px 24px; border: none; border-radius: 12px;
@@ -546,22 +543,24 @@
     border-top-color: var(--accent); border-radius: 50%;
     animation: spin 0.9s linear infinite;
   }
-  .boot-text { color: var(--text-dim); font-size: 14px; }
+  .boot-text { color: var(--text-dim); font-size: 14px; text-align: center; max-width: 320px; line-height: 1.5; }
+  .boot-hint { font-size: 12.5px; color: var(--text-mute); margin-top: 4px; }
+  .boot-retry {
+    margin-top: 12px; padding: 10px 22px; border: 1.5px solid var(--border-strong);
+    background: rgba(255,255,255,0.03); color: var(--text);
+    border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s; display: none;
+  }
+  .boot-retry.show { display: inline-block; }
+  .boot-retry:hover { border-color: var(--accent); color: var(--accent); }
 
   @media (max-width: 720px) {
     body { padding: 0; align-items: stretch; }
     .app {
-      height: 100dvh;
-      max-height: none;
-      border-radius: 0;
-      border: none;
-      position: fixed;
-      inset: 0;
-      width: 100%;
+      height: 100dvh; max-height: none; border-radius: 0; border: none;
+      position: fixed; inset: 0; width: 100%;
     }
-    @supports not (height: 100dvh) {
-      .app { height: 100vh; }
-    }
+    @supports not (height: 100dvh) { .app { height: 100vh; } }
     .sidebar {
       position: absolute; inset: 0; width: 100%; z-index: 10;
       transition: transform 0.3s ease; background: var(--sidebar-solid);
@@ -571,30 +570,10 @@
     .msg-wrap { max-width: 85%; }
     .messages { padding: 16px; }
     .file-name { max-width: 140px; }
-
-    .chat-window {
-      height: 100%;
-      max-height: 100%;
-      display: flex;
-      flex-direction: column;
-    }
-    .messages {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .input-area {
-      flex-shrink: 0;
-      padding-bottom: max(16px, env(safe-area-inset-bottom));
-    }
-    .input-wrapper textarea,
-    .modal-card input,
-    .modal-card textarea,
-    .search-box input,
-    .input-group input {
-      font-size: 16px;
-    }
+    .chat-window { height: 100%; max-height: 100%; display: flex; flex-direction: column; }
+    .messages { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .input-area { flex-shrink: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+    .input-wrapper textarea, .modal-card input, .modal-card textarea, .search-box input, .input-group input { font-size: 16px; }
     .modal-overlay { padding: 12px; }
     .modal-card { padding: 24px 20px; border-radius: 20px; max-height: 85dvh; }
   }
@@ -605,13 +584,17 @@
 
 <div class="boot-screen" id="bootScreen">
   <div class="boot-spinner"></div>
-  <div class="boot-text">Загрузка…</div>
+  <div class="boot-text" id="bootText">
+    Загрузка…
+    <div class="boot-hint" id="bootHint">Если сервер давно не использовался, запуск может занять до 60 секунд</div>
+  </div>
+  <button class="boot-retry" id="bootRetry" onclick="location.reload()">Перезагрузить</button>
 </div>
 
 <div class="modal-overlay" id="nameModal" style="display:none">
   <div class="modal-card">
-    <h2 id="loginTitle">Добро пожаловать 👋</h2>
-    <div class="sub" id="loginSub">Введите имя и @username. Если аккаунт с таким @username уже существует — вы войдёте в него.</div>
+    <h2>Добро пожаловать 👋</h2>
+    <div class="sub">Введите имя и @username. Если аккаунт с таким @username уже существует — вы войдёте в него.</div>
 
     <label>Имя</label>
     <input id="nameInput" type="text" placeholder="Например: Иван Петров" maxlength="30">
@@ -631,16 +614,13 @@
   <div class="modal-card">
     <h2>Найти пользователя</h2>
     <div class="sub">Введите @username — точный или часть</div>
-
     <div class="input-group">
       <span class="input-prefix">@</span>
       <input id="searchUserInput" type="text" placeholder="username" autocomplete="off" spellcheck="false">
     </div>
-
     <div class="search-results" id="searchResults">
       <div class="empty-search">Начните вводить @username</div>
     </div>
-
     <button class="cancel-btn" id="searchCancel">Закрыть</button>
   </div>
 </div>
@@ -649,7 +629,6 @@
   <div class="modal-card">
     <h2>Новая группа или канал</h2>
     <div class="sub">Создайте пространство для общения</div>
-
     <label>Тип</label>
     <div class="type-select" id="typeSelect">
       <div class="type-opt selected" data-type="group">
@@ -663,17 +642,13 @@
         <div class="desc">Пишут админы</div>
       </div>
     </div>
-
     <label>Название</label>
     <input type="text" id="roomName" placeholder="Например: Друзья" maxlength="60">
-
     <label>Описание (необязательно)</label>
     <textarea id="roomDesc" placeholder="О чём этот чат?" maxlength="200" style="min-height: 60px;"></textarea>
-
     <label>Пригласить (необязательно)</label>
     <input type="text" id="roomInvite" placeholder="@user1, @user2" autocomplete="off">
     <div class="input-hint">Введите @username через запятую</div>
-
     <button class="primary-btn" id="createSubmit">Создать</button>
     <button class="cancel-btn" id="createCancel">Отмена</button>
   </div>
@@ -683,10 +658,8 @@
   <div class="modal-card">
     <h2>Пригласить в чат</h2>
     <div class="sub" id="inviteRoomName"></div>
-
     <label>@username (через запятую)</label>
     <input type="text" id="inviteInput" placeholder="@user1, @user2" autocomplete="off">
-
     <button class="primary-btn" id="inviteSubmit">Пригласить</button>
     <button class="cancel-btn" id="inviteCancel">Отмена</button>
   </div>
@@ -696,23 +669,19 @@
   <div class="modal-card">
     <h2>Мой профиль</h2>
     <div class="sub">Измените аватар и имя</div>
-
     <div class="avatar-editor">
       <div class="avatar-preview" id="avatarPreview"></div>
       <button class="avatar-upload-btn" id="avatarUploadBtn">📷 Загрузить фото</button>
       <button class="avatar-remove-btn" id="avatarRemoveBtn" style="display:none">Удалить фото</button>
     </div>
-
     <label>Имя</label>
     <input type="text" id="profileName" maxlength="30">
-
     <label>@username</label>
     <div class="input-group">
       <span class="input-prefix">@</span>
       <input type="text" id="profileUsername" disabled style="opacity:0.6; cursor:not-allowed;">
     </div>
     <div class="input-hint">Username нельзя изменить</div>
-
     <button class="primary-btn" id="profileSave">Сохранить</button>
     <button class="cancel-btn" id="profileCancel">Отмена</button>
     <button class="danger-btn" id="profileLogout">Выйти из аккаунта</button>
@@ -726,26 +695,18 @@
       <div class="header-btns">
         <button class="icon-round" id="notifyBtn" title="Уведомления">🔔</button>
         <button class="icon-round" id="searchUserBtn" title="Найти пользователя">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-          </svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </button>
         <button class="icon-round" id="createRoomBtn" title="Создать группу или канал">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         <div class="me-avatar" id="meAvatar" title="Мой профиль"></div>
       </div>
     </div>
-
     <div class="search-box">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-      </svg>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
       <input type="text" placeholder="Поиск в чатах..." id="filterInput">
     </div>
-
     <div class="chats" id="chats"></div>
   </aside>
 
@@ -767,18 +728,14 @@
 
     <div class="input-area">
       <button class="icon-btn" title="Прикрепить файл" id="attachBtn">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-        </svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
       </button>
       <input type="file" id="fileInput" style="display:none">
       <div class="input-wrapper">
         <textarea id="messageInput" placeholder="Напишите сообщение..." rows="1"></textarea>
       </div>
       <button class="send-btn" id="sendBtn" title="Отправить">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
-        </svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
       </button>
     </div>
   </main>
@@ -787,7 +744,13 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: Infinity });
+const socket = io({
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: Infinity,
+  timeout: 20000,
+  transports: ['websocket', 'polling']
+});
 
 const PALETTE = [
   ['#7c5cff','#b846ff'], ['#ff5c8a','#ff8a5c'], ['#5cffb8','#5c9dff'],
@@ -812,6 +775,7 @@ let profileDraft = null;
 let currentFilter = '';
 let bootDone = false;
 let pendingJoin = null;
+let connectionTimedOut = false;
 
 const $ = id => document.getElementById(id);
 const messagesEl = $('messages');
@@ -829,9 +793,30 @@ function urlBase64ToUint8Array(s) { const pad = '='.repeat((4 - s.length % 4) % 
 function avatarHtml(user) { if (user && user.avatar) return `<img src="${user.avatar}" alt="">`; return escapeHtml(user.initials || '?'); }
 function avatarStyle(user) { return user.avatar ? 'background:#1a1d35' : `background:${user.color}`; }
 
-/* ============================================================
-   СОХРАНЁННЫЙ АККАУНТ
-   ============================================================ */
+/* === BOOT === */
+function hideBoot() {
+  if (bootDone) return;
+  bootDone = true;
+  const bs = $('bootScreen');
+  if (!bs) return;
+  bs.classList.add('fade-out');
+  setTimeout(() => { if (bs.parentNode) bs.remove(); }, 500);
+}
+function showBootError(msg) {
+  const hint = $('bootHint');
+  const retry = $('bootRetry');
+  if (hint) hint.textContent = msg;
+  if (retry) retry.classList.add('show');
+  const sp = document.querySelector('.boot-spinner');
+  if (sp) sp.style.display = 'none';
+}
+setTimeout(() => {
+  if (!bootDone && !socket.connected) {
+    showBootError('Не удалось подключиться к серверу. Возможно, сервер запускается (до 60 сек) — попробуйте перезагрузить страницу.');
+  }
+}, 20000);
+
+/* === АККАУНТ === */
 const savedMe = (() => { try { return JSON.parse(localStorage.getItem('messenger_me') || 'null'); } catch { return null; } })();
 
 function validateUsername(v) {
@@ -851,7 +836,6 @@ $('usernameInput').addEventListener('input', e => {
   hint.textContent = v.msg;
   hint.className = 'input-hint ' + v.cls;
 });
-
 $('nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('usernameInput').focus(); });
 $('usernameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('nameSubmit').click(); });
 
@@ -867,35 +851,20 @@ $('nameSubmit').onclick = () => {
   const colors = PALETTE[Math.floor(Math.random() * PALETTE.length)];
   const initials = name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || name.slice(0, 2).toUpperCase();
 
-  const localMe = {
-    userId,
-    name,
-    username,
-    color: `linear-gradient(135deg,${colors[0]},${colors[1]})`,
-    initials,
-    avatar: null
-  };
-
-  // Пока локально заполняем
-  me = localMe;
+  me = { userId, name, username, color: `linear-gradient(135deg,${colors[0]},${colors[1]})`, initials, avatar: null };
   localStorage.setItem('messenger_me', JSON.stringify(me));
 
   $('nameModal').style.display = 'none';
   $('app').style.display = 'flex';
   renderMeAvatar();
   registerSocketListeners();
-  // Отправляем join и ждём ответа от сервера — он скажет, войти в существующий или создать новый
   sendJoin();
   initPushState();
   hideBoot();
 };
 
 function sendJoin() {
-  if (!me || !socket.connected) {
-    // Запомним — отправим, как только подключимся
-    pendingJoin = true;
-    return;
-  }
+  if (!me || !socket.connected) { pendingJoin = true; return; }
   pendingJoin = false;
   socket.emit('join', {
     userId: me.userId, name: me.name, username: me.username,
@@ -903,15 +872,14 @@ function sendJoin() {
   });
 }
 
-/* ============================================================
-   SOCKET
-   ============================================================ */
+/* === SOCKET === */
 function registerSocketListeners() {
   if (listenersRegistered) return;
   listenersRegistered = true;
 
   socket.on('connect', () => {
     connected = true;
+    connectionTimedOut = false;
     if (me) sendJoin();
   });
   socket.on('disconnect', () => { connected = false; toast('⚠️ Соединение потеряно'); });
@@ -920,7 +888,6 @@ function registerSocketListeners() {
 
   socket.on('join-error', ({ text }) => {
     toast('⚠️ ' + text, 4000);
-    // Очищаем и возвращаем на форму
     localStorage.removeItem('messenger_me');
     me = null;
     $('app').style.display = 'none';
@@ -929,23 +896,14 @@ function registerSocketListeners() {
   });
 
   socket.on('joined', ({ userId, user, isNewAccount }) => {
-    // Сервер вернул настоящие данные — обновляем локальное состояние
     me = {
-      userId,
-      name: user.name,
-      username: user.username,
-      color: user.color,
-      initials: user.initials,
-      avatar: user.avatar || null
+      userId, name: user.name, username: user.username,
+      color: user.color, initials: user.initials, avatar: user.avatar || null
     };
     localStorage.setItem('messenger_me', JSON.stringify(me));
     renderMeAvatar();
-
-    if (isNewAccount) {
-      toast(`✅ Аккаунт @${user.username} создан`, 3000);
-    } else {
-      toast(`👋 С возвращением, ${user.name}!`, 3000);
-    }
+    if (isNewAccount) toast(`✅ Аккаунт @${user.username} создан`, 3000);
+    else toast(`👋 С возвращением, ${user.name}!`, 3000);
   });
 
   socket.on('history', msgs => { allMessages = Array.isArray(msgs) ? msgs : []; renderMessages(); renderChats(); });
@@ -1005,9 +963,7 @@ function registerSocketListeners() {
   });
 }
 
-/* ============================================================
-   СООБЩЕНИЯ
-   ============================================================ */
+/* === СООБЩЕНИЯ === */
 function addMessage(msg) {
   if (allMessages.some(m => m.id === msg.id)) return;
   allMessages.push(msg);
@@ -1103,9 +1059,7 @@ function renderMessages() {
   requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; });
 }
 
-/* ============================================================
-   СПИСОК ЧАТОВ
-   ============================================================ */
+/* === СПИСОК ЧАТОВ === */
 function renderChats() {
   if (!me) return;
   chatsEl.innerHTML = '';
@@ -1202,9 +1156,7 @@ function renderUserItem(u) {
   return item;
 }
 
-/* ============================================================
-   ХЕДЕР
-   ============================================================ */
+/* === ХЕДЕР === */
 function updateHeader() {
   if (!me) return;
   const ha = $('headerAvatar'), hn = $('headerName'), hs = $('headerStatus'), actions = $('headerActions');
@@ -1303,9 +1255,7 @@ function markCurrentAsRead() {
   if (ids.length) socket.emit('read', { userId: me.userId, messageIds: ids });
 }
 
-/* ============================================================
-   ПРОФИЛЬ
-   ============================================================ */
+/* === ПРОФИЛЬ === */
 function renderMeAvatar() {
   if (!me) return;
   const el = $('meAvatar');
@@ -1365,16 +1315,13 @@ $('profileSave').onclick = () => {
 };
 $('profileCancel').onclick = () => { profileDraft = null; $('profileModal').style.display = 'none'; };
 $('profileName').addEventListener('keydown', e => { if (e.key === 'Enter') $('profileSave').click(); });
-
 $('profileLogout').onclick = () => {
   if (!confirm('Выйти из аккаунта? При следующем входе нужно будет ввести @username заново.')) return;
   localStorage.removeItem('messenger_me');
   location.reload();
 };
 
-/* ============================================================
-   ПОИСК ПОЛЬЗОВАТЕЛЯ
-   ============================================================ */
+/* === ПОИСК ПОЛЬЗОВАТЕЛЯ === */
 $('searchUserBtn').onclick = () => {
   $('searchUserInput').value = '';
   $('searchResults').innerHTML = '<div class="empty-search">Начните вводить @username</div>';
@@ -1425,9 +1372,7 @@ function renderSearchResults(query, results) {
   });
 }
 
-/* ============================================================
-   ОТПРАВКА
-   ============================================================ */
+/* === ОТПРАВКА === */
 async function uploadFile(file) {
   const fd = new FormData();
   fd.append('file', file);
@@ -1499,9 +1444,7 @@ inputEl.addEventListener('input', () => {
   typingTimeout = setTimeout(() => { socket.emit('typing', { to: currentRoomId, from: me.userId, fromName: me.name }); }, 200);
 });
 
-/* ============================================================
-   СОЗДАНИЕ ГРУППЫ/КАНАЛА
-   ============================================================ */
+/* === СОЗДАНИЕ ГРУППЫ/КАНАЛА === */
 let createType = 'group';
 $('createRoomBtn').onclick = () => {
   $('roomName').value = ''; $('roomDesc').value = ''; $('roomInvite').value = '';
@@ -1527,9 +1470,7 @@ $('createSubmit').onclick = () => {
 };
 $('roomName').addEventListener('keydown', e => { if (e.key === 'Enter') $('createSubmit').click(); });
 
-/* ============================================================
-   ПРИГЛАШЕНИЕ В ГРУППУ
-   ============================================================ */
+/* === ПРИГЛАШЕНИЕ В ГРУППУ === */
 $('inviteCancel').onclick = () => $('inviteModal').style.display = 'none';
 $('inviteSubmit').onclick = () => {
   const usernames = $('inviteInput').value.split(',').map(s => s.trim()).filter(Boolean);
@@ -1539,17 +1480,13 @@ $('inviteSubmit').onclick = () => {
 };
 $('inviteInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('inviteSubmit').click(); });
 
-/* ============================================================
-   ФИЛЬТР В СПИСКЕ ЧАТОВ
-   ============================================================ */
+/* === ФИЛЬТР === */
 $('filterInput').addEventListener('input', e => {
   currentFilter = e.target.value;
   renderChats();
 });
 
-/* ============================================================
-   WEB PUSH
-   ============================================================ */
+/* === WEB PUSH === */
 async function initPushState() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) { $('notifyBtn').style.display = 'none'; return; }
   try {
@@ -1558,7 +1495,6 @@ async function initPushState() {
     pushEnabled = !!sub;
     $('notifyBtn').classList.toggle('on', pushEnabled);
     $('notifyBtn').textContent = pushEnabled ? '🔔' : '🔕';
-    $('notifyBtn').title = pushEnabled ? 'Уведомления включены' : 'Включить уведомления';
   } catch (e) { console.warn(e); }
 }
 $('notifyBtn').onclick = async () => {
@@ -1570,7 +1506,7 @@ $('notifyBtn').onclick = async () => {
       await fetch('/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, endpoint: sub.endpoint }) });
       await sub.unsubscribe();
       pushEnabled = false;
-      $('notifyBtn').classList.remove('on'); $('notifyBtn').textContent = '🔕'; $('notifyBtn').title = 'Включить уведомления';
+      $('notifyBtn').classList.remove('on'); $('notifyBtn').textContent = '🔕';
       toast('🔕 Уведомления отключены'); return;
     }
     const perm = await Notification.requestPermission();
@@ -1579,14 +1515,12 @@ $('notifyBtn').onclick = async () => {
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
     await fetch('/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, subscription: sub }) });
     pushEnabled = true;
-    $('notifyBtn').classList.add('on'); $('notifyBtn').textContent = '🔔'; $('notifyBtn').title = 'Уведомления включены';
+    $('notifyBtn').classList.add('on'); $('notifyBtn').textContent = '🔔';
     toast('✅ Уведомления включены');
   } catch (e) { console.error(e); toast('Ошибка: ' + e.message); }
 };
 
-/* ============================================================
-   LIGHTBOX
-   ============================================================ */
+/* === LIGHTBOX === */
 messagesEl.addEventListener('click', e => {
   const img = e.target.closest('[data-img]');
   if (!img) return;
@@ -1595,3 +1529,4 @@ messagesEl.addEventListener('click', e => {
   lb.innerHTML = `<img src="${img.dataset.img}" alt="">`;
   lb.onclick = () => lb.remove();
   document.body.appendChild(lb);
+});
