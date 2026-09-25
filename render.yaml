@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: messenger
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.10.0
