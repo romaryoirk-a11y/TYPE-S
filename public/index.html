@@ -976,4 +976,130 @@
     typingTimeout = setTimeout(() => { socket.emit('typing', { to: currentRoomId, from: me.userId, fromName: me.name }); }, 200);
   });
 
-  let createType = '
+  let createType = 'group';
+  $('createRoomBtn').onclick = () => {
+    $('roomName').value = ''; $('roomDesc').value = ''; $('roomInvite').value = '';
+    createType = 'group';
+    document.querySelectorAll('.type-opt').forEach(o => o.classList.toggle('selected', o.dataset.type === 'group'));
+    $('createModal').style.display = 'flex';
+    setTimeout(() => $('roomName').focus(), 100);
+  };
+  document.querySelectorAll('.type-opt').forEach(opt => {
+    opt.onclick = () => {
+      createType = opt.dataset.type;
+      document.querySelectorAll('.type-opt').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+    };
+  });
+  $('createCancel').onclick = () => $('createModal').style.display = 'none';
+  $('createSubmit').onclick = () => {
+    const name = $('roomName').value.trim();
+    if (!name) { toast('Введите название'); return; }
+    const invites = $('roomInvite').value.split(',').map(s => s.trim()).filter(Boolean);
+    socket.emit('create-room', { name, type: createType, description: $('roomDesc').value.trim(), creator: me.userId, inviteUsernames: invites });
+    $('createModal').style.display = 'none';
+  };
+  $('roomName').addEventListener('keydown', e => { if (e.key === 'Enter') $('createSubmit').click(); });
+
+  $('inviteCancel').onclick = () => $('inviteModal').style.display = 'none';
+  $('inviteSubmit').onclick = () => {
+    const usernames = $('inviteInput').value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!usernames.length) { toast('Введите @username'); return; }
+    socket.emit('invite-to-room', { roomId: currentRoomId, byUserId: me.userId, usernames });
+    $('inviteModal').style.display = 'none';
+  };
+  $('inviteInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('inviteSubmit').click(); });
+
+  $('filterInput').addEventListener('input', e => { currentFilter = e.target.value; renderChats(); });
+
+  async function initPushState() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) { $('notifyBtn').style.display = 'none'; return; }
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      const sub = await reg.pushManager.getSubscription();
+      pushEnabled = !!sub;
+      $('notifyBtn').classList.toggle('on', pushEnabled);
+      $('notifyBtn').textContent = pushEnabled ? '🔔' : '🔕';
+    } catch (e) { console.warn(e); }
+  }
+  $('notifyBtn').onclick = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Push не поддерживается'); return; }
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch('/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, endpoint: sub.endpoint }) });
+        await sub.unsubscribe();
+        pushEnabled = false;
+        $('notifyBtn').classList.remove('on'); $('notifyBtn').textContent = '🔕';
+        toast('🔕 Уведомления отключены'); return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { toast('Уведомления запрещены'); return; }
+      const { key } = await fetch('/vapid-public-key').then(r => r.json());
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
+      await fetch('/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, subscription: sub }) });
+      pushEnabled = true;
+      $('notifyBtn').classList.add('on'); $('notifyBtn').textContent = '🔔';
+      toast('✅ Уведомления включены');
+    } catch (e) { console.error(e); toast('Ошибка: ' + e.message); }
+  };
+
+  messagesEl.addEventListener('click', e => {
+    const img = e.target.closest('[data-img]');
+    if (!img) return;
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = '<img src="' + img.dataset.img + '" alt="">';
+    lb.onclick = () => lb.remove();
+    document.body.appendChild(lb);
+  });
+
+  $('backBtn').onclick = () => $('sidebar').classList.remove('hidden');
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { markCurrentAsRead(); document.title = 'Мессенджер'; }
+  });
+
+  function isMobile() { return window.innerWidth <= 720; }
+  function syncAppHeight() {
+    if (!isMobile()) { const app = $('app'); if (app) app.style.height = ''; return; }
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    const app = $('app');
+    if (app) app.style.height = h + 'px';
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncAppHeight);
+    window.visualViewport.addEventListener('scroll', syncAppHeight);
+  }
+  window.addEventListener('resize', syncAppHeight);
+  window.addEventListener('orientationchange', () => setTimeout(syncAppHeight, 300));
+  inputEl.addEventListener('focus', () => { setTimeout(() => { syncAppHeight(); messagesEl.scrollTop = messagesEl.scrollHeight; }, 300); });
+  inputEl.addEventListener('blur', () => setTimeout(syncAppHeight, 100));
+  syncAppHeight();
+
+  // СТАРТ
+  registerSocketListeners();
+  if (savedMe && savedMe.name && savedMe.username) {
+    me = savedMe;
+    renderMeAvatar();
+    $('app').style.display = 'flex';
+    initPushState();
+    hideBoot();
+    if (socket.connected) sendJoin();
+  } else {
+    hideBoot();
+    $('nameModal').style.display = 'flex';
+    setTimeout(() => $('nameInput').focus(), 100);
+  }
+
+  setTimeout(() => {
+    if (!me && $('nameModal') && $('nameModal').style.display === 'none') {
+      hideBoot();
+      $('nameModal').style.display = 'flex';
+    }
+  }, 3000);
+})();
+</script>
+</body>
+</html>
