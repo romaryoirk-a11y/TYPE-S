@@ -98,6 +98,18 @@ function broadcastUserLists() {
 }
 function allUserIds() { return Object.keys(knownUsers); }
 
+// Видимые сообщения для конкретного пользователя
+function visibleMessagesFor(userId) {
+  return messages.filter(m => {
+    if (m.to === 'public') return true;
+    if (m.to.startsWith('r_')) {
+      const room = rooms[m.to];
+      return room && room.members.includes(userId);
+    }
+    return m.from === userId || m.to === userId;
+  });
+}
+
 function messageRecipients(m) {
   if (m.to === 'public') return allUserIds();
   if (m.to.startsWith('r_')) return rooms[m.to]?.members || [];
@@ -146,31 +158,65 @@ io.on('connection', socket => {
       socket.emit('join-error', { text: 'Username: 3–20 символов, латиница/цифры/_, начинается с буквы' });
       return;
     }
-    const taken = Object.entries(knownUsers).find(([id, u]) =>
-      id !== userId && u.username && u.username.toLowerCase() === cleanUsername.toLowerCase()
+
+    // Ищем существующий аккаунт с таким username (без учёта регистра)
+    const existingEntry = Object.entries(knownUsers).find(([id, u]) =>
+      u.username && u.username.toLowerCase() === cleanUsername.toLowerCase()
     );
-    if (taken) {
-      socket.emit('join-error', { text: 'Этот @' + cleanUsername + ' уже занят, выберите другой' });
-      return;
+
+    let finalUserId;
+    let isNewAccount = false;
+
+    if (existingEntry) {
+      // Вход в существующий аккаунт
+      finalUserId = existingEntry[0];
+    } else {
+      // Новый аккаунт
+      finalUserId = userId;
+      isNewAccount = true;
     }
 
-    socket.userId = userId;
-    socket.join('user_' + userId);
-    if (!online.has(userId)) online.set(userId, new Set());
-    online.get(userId).add(socket.id);
+    socket.userId = finalUserId;
+    socket.join('user_' + finalUserId);
+    if (!online.has(finalUserId)) online.set(finalUserId, new Set());
+    online.get(finalUserId).add(socket.id);
 
-    knownUsers[userId] = {
-      ...knownUsers[userId],
-      name, username: cleanUsername, color, initials,
-      contacts: knownUsers[userId]?.contacts || []
-    };
+    if (isNewAccount) {
+      knownUsers[finalUserId] = {
+        name,
+        username: cleanUsername,
+        color,
+        initials,
+        avatar: null,
+        contacts: []
+      };
+    } else {
+      // Обновляем только цвет/инициалы, если их нет, но не перезаписываем имя и аватар
+      const u = knownUsers[finalUserId];
+      if (!u.color) u.color = color;
+      if (!u.initials) u.initials = initials;
+      if (!u.contacts) u.contacts = [];
+    }
     saveUsers();
 
-    socket.emit('history', messages);
+    const user = knownUsers[finalUserId];
+
+    socket.emit('history', visibleMessagesFor(finalUserId));
     socket.emit('rooms', Object.values(rooms));
-    socket.emit('joined', { userId, username: cleanUsername });
+    socket.emit('joined', {
+      userId: finalUserId,
+      user: {
+        userId: finalUserId,
+        name: user.name,
+        username: user.username,
+        color: user.color,
+        initials: user.initials,
+        avatar: user.avatar || null
+      },
+      isNewAccount
+    });
     broadcastUserLists();
-    console.log(`[+] ${name} (@${cleanUsername}) подключён`);
+    console.log(`[+] ${user.name} (@${user.username}) ${isNewAccount ? 'зарегистрирован' : 'вошёл'}`);
   });
 
   socket.on('update-profile', ({ userId, name, color, initials, avatar }) => {
