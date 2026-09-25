@@ -48,7 +48,6 @@
       radial-gradient(ellipse 70% 50% at 80% 20%, rgba(92,157,255,0.08), transparent 60%);
   }
 
-  /* ==== MODAL ==== */
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(5,6,13,0.75);
     backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center;
@@ -90,6 +89,7 @@
   .input-hint { font-size: 12px; color: var(--text-mute); margin-top: 6px; }
   .input-hint.ok { color: var(--success); }
   .input-hint.err { color: var(--danger); }
+  .input-hint.info { color: var(--accent); }
 
   .modal-card .primary-btn {
     width: 100%; margin-top: 20px; padding: 14px 24px; border: none; border-radius: 12px;
@@ -534,7 +534,6 @@
   .search-result-item .add-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124,92,255,0.5); }
   .empty-search { text-align: center; padding: 24px 12px; color: var(--text-mute); font-size: 13.5px; }
 
-  /* ==== ЗАГРУЗЧИК ПРИ АВТОВХОДЕ ==== */
   .boot-screen {
     position: fixed; inset: 0; z-index: 900;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -549,9 +548,6 @@
   }
   .boot-text { color: var(--text-dim); font-size: 14px; }
 
-  /* ============================================================
-     МОБИЛЬНАЯ ВЕРСИЯ + ФИКС КЛАВИАТУРЫ
-     ============================================================ */
   @media (max-width: 720px) {
     body { padding: 0; align-items: stretch; }
     .app {
@@ -607,20 +603,18 @@
 </head>
 <body>
 
-<!-- ЗАГРУЗЧИК ДЛЯ АВТОВХОДА -->
 <div class="boot-screen" id="bootScreen">
   <div class="boot-spinner"></div>
   <div class="boot-text">Загрузка…</div>
 </div>
 
-<!-- ЭКРАН ВХОДА -->
 <div class="modal-overlay" id="nameModal" style="display:none">
   <div class="modal-card">
-    <h2>Добро пожаловать 👋</h2>
-    <div class="sub">Придумайте имя и уникальный @username</div>
+    <h2 id="loginTitle">Добро пожаловать 👋</h2>
+    <div class="sub" id="loginSub">Введите имя и @username. Если аккаунт с таким @username уже существует — вы войдёте в него.</div>
 
     <label>Имя</label>
-    <input id="nameInput" type="text" placeholder="Например: Иван Петров" maxlength="30" autofocus>
+    <input id="nameInput" type="text" placeholder="Например: Иван Петров" maxlength="30">
 
     <label>@username</label>
     <div class="input-group">
@@ -629,7 +623,7 @@
     </div>
     <div class="input-hint" id="usernameHint">3–20 символов: латиница, цифры, _</div>
 
-    <button class="primary-btn" id="nameSubmit">Войти в чат</button>
+    <button class="primary-btn" id="nameSubmit">Войти</button>
   </div>
 </div>
 
@@ -817,6 +811,7 @@ let listenersRegistered = false;
 let profileDraft = null;
 let currentFilter = '';
 let bootDone = false;
+let pendingJoin = null;
 
 const $ = id => document.getElementById(id);
 const messagesEl = $('messages');
@@ -835,7 +830,7 @@ function avatarHtml(user) { if (user && user.avatar) return `<img src="${user.av
 function avatarStyle(user) { return user.avatar ? 'background:#1a1d35' : `background:${user.color}`; }
 
 /* ============================================================
-   ВХОД — с автосохранением
+   СОХРАНЁННЫЙ АККАУНТ
    ============================================================ */
 const savedMe = (() => { try { return JSON.parse(localStorage.getItem('messenger_me') || 'null'); } catch { return null; } })();
 
@@ -866,84 +861,42 @@ $('nameSubmit').onclick = () => {
   if (!name) { toast('Введите имя'); return; }
   const v = validateUsername(username);
   if (!v.ok) { toast('Некорректный @username'); return; }
-  enterApp({ name, username });
-};
 
-// Открыть приложение с данными (новыми или сохранёнными)
-function enterApp(data) {
   const existing = savedMe;
-  const sameUser = existing && existing.name === data.name && existing.username === data.username;
+  const userId = existing?.userId || ('u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36));
+  const colors = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  const initials = name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || name.slice(0, 2).toUpperCase();
 
-  if (sameUser) {
-    me = existing;
-  } else {
-    const userId = existing?.userId || ('u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36));
-    const colors = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-    const initials = data.name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || data.name.slice(0, 2).toUpperCase();
-    me = {
-      userId,
-      name: data.name,
-      username: data.username,
-      color: `linear-gradient(135deg,${colors[0]},${colors[1]})`,
-      initials,
-      avatar: null
-    };
-  }
-  // Сохраняем в localStorage
+  const localMe = {
+    userId,
+    name,
+    username,
+    color: `linear-gradient(135deg,${colors[0]},${colors[1]})`,
+    initials,
+    avatar: null
+  };
+
+  // Пока локально заполняем
+  me = localMe;
   localStorage.setItem('messenger_me', JSON.stringify(me));
 
   $('nameModal').style.display = 'none';
   $('app').style.display = 'flex';
   renderMeAvatar();
   registerSocketListeners();
+  // Отправляем join и ждём ответа от сервера — он скажет, войти в существующий или создать новый
   sendJoin();
   initPushState();
   hideBoot();
-}
-
-// Автовход при загрузке, если уже был вход
-function tryAutoLogin() {
-  if (!savedMe || !savedMe.name || !savedMe.username) {
-    // Нет сохранённых данных — показываем форму
-    hideBoot();
-    $('nameModal').style.display = 'flex';
-    setTimeout(() => $('nameInput').focus(), 100);
-    return;
-  }
-
-  // Восстанавливаем поля формы на случай логаута
-  $('nameInput').value = savedMe.name;
-  $('usernameInput').value = savedMe.username;
-
-  // Автоматически входим
-  me = savedMe;
-  renderMeAvatar();
-  $('app').style.display = 'flex';
-  registerSocketListeners();
-  sendJoin();
-  initPushState();
-  hideBoot();
-}
-
-function hideBoot() {
-  if (bootDone) return;
-  bootDone = true;
-  const bs = $('bootScreen');
-  bs.classList.add('fade-out');
-  setTimeout(() => bs.remove(), 500);
-}
-
-// Если join не удался (username занят на сервере) — вернуть форму
-function backToLogin() {
-  localStorage.removeItem('messenger_me');
-  me = null;
-  $('app').style.display = 'none';
-  $('nameModal').style.display = 'flex';
-  setTimeout(() => $('nameInput').focus(), 100);
-}
+};
 
 function sendJoin() {
-  if (!me || !socket.connected) return;
+  if (!me || !socket.connected) {
+    // Запомним — отправим, как только подключимся
+    pendingJoin = true;
+    return;
+  }
+  pendingJoin = false;
   socket.emit('join', {
     userId: me.userId, name: me.name, username: me.username,
     color: me.color, initials: me.initials
@@ -957,21 +910,41 @@ function registerSocketListeners() {
   if (listenersRegistered) return;
   listenersRegistered = true;
 
-  socket.on('connect', () => { connected = true; sendJoin(); });
+  socket.on('connect', () => {
+    connected = true;
+    if (me) sendJoin();
+  });
   socket.on('disconnect', () => { connected = false; toast('⚠️ Соединение потеряно'); });
-  socket.on('connect_error', err => { toast('❌ Ошибка подключения'); });
+  socket.on('connect_error', () => { toast('❌ Ошибка подключения'); });
   socket.io.on('reconnect', () => toast('✅ Соединение восстановлено'));
 
   socket.on('join-error', ({ text }) => {
     toast('⚠️ ' + text, 4000);
-    // Возвращаем на форму входа — сохранённые данные не подходят
-    backToLogin();
+    // Очищаем и возвращаем на форму
+    localStorage.removeItem('messenger_me');
+    me = null;
+    $('app').style.display = 'none';
+    $('nameModal').style.display = 'flex';
+    setTimeout(() => $('nameInput').focus(), 100);
   });
 
-  socket.on('joined', ({ userId, username }) => {
-    if (me && me.username !== username) {
-      me.username = username;
-      localStorage.setItem('messenger_me', JSON.stringify(me));
+  socket.on('joined', ({ userId, user, isNewAccount }) => {
+    // Сервер вернул настоящие данные — обновляем локальное состояние
+    me = {
+      userId,
+      name: user.name,
+      username: user.username,
+      color: user.color,
+      initials: user.initials,
+      avatar: user.avatar || null
+    };
+    localStorage.setItem('messenger_me', JSON.stringify(me));
+    renderMeAvatar();
+
+    if (isNewAccount) {
+      toast(`✅ Аккаунт @${user.username} создан`, 3000);
+    } else {
+      toast(`👋 С возвращением, ${user.name}!`, 3000);
     }
   });
 
@@ -982,7 +955,7 @@ function registerSocketListeners() {
   socket.on('user-updated', ({ userId, user }) => {
     const idx = users.findIndex(u => u.userId === userId);
     if (idx >= 0) users[idx] = { ...users[idx], ...user };
-    if (userId === me.userId) {
+    if (me && userId === me.userId) {
       if (user.avatar !== undefined) me.avatar = user.avatar;
       if (user.name) me.name = user.name;
       if (user.initials) me.initials = user.initials;
@@ -1134,6 +1107,7 @@ function renderMessages() {
    СПИСОК ЧАТОВ
    ============================================================ */
 function renderChats() {
+  if (!me) return;
   chatsEl.innerHTML = '';
   const f = currentFilter.trim().toLowerCase();
   const match = (text) => !f || String(text).toLowerCase().includes(f);
@@ -1232,6 +1206,7 @@ function renderUserItem(u) {
    ХЕДЕР
    ============================================================ */
 function updateHeader() {
+  if (!me) return;
   const ha = $('headerAvatar'), hn = $('headerName'), hs = $('headerStatus'), actions = $('headerActions');
   actions.innerHTML = '';
 
@@ -1302,6 +1277,7 @@ function updateHeader() {
 }
 
 function updateInputState() {
+  if (!me) return;
   if (currentRoomId.startsWith('r_')) {
     const room = rooms.find(r => r.id === currentRoomId);
     if (room && room.type === 'channel' && !room.admins.includes(me.userId)) {
@@ -1321,7 +1297,7 @@ function openChat(id) {
 }
 
 function markCurrentAsRead() {
-  if (document.hidden) return;
+  if (document.hidden || !me) return;
   const msgs = getChatMessages(currentRoomId);
   const ids = msgs.filter(m => m.from !== me.userId && !(m.readBy || []).includes(me.userId)).map(m => m.id);
   if (ids.length) socket.emit('read', { userId: me.userId, messageIds: ids });
@@ -1331,6 +1307,7 @@ function markCurrentAsRead() {
    ПРОФИЛЬ
    ============================================================ */
 function renderMeAvatar() {
+  if (!me) return;
   const el = $('meAvatar');
   if (me.avatar) { el.innerHTML = `<img src="${me.avatar}" alt="">`; el.style.background = '#1a1d35'; }
   else { el.innerHTML = me.initials; el.style.background = me.color; }
@@ -1342,6 +1319,7 @@ function updateProfilePreview() {
   $('avatarRemoveBtn').style.display = profileDraft.avatar ? 'inline-block' : 'none';
 }
 $('meAvatar').onclick = () => {
+  if (!me) return;
   profileDraft = { ...me };
   $('profileName').value = profileDraft.name;
   $('profileUsername').value = profileDraft.username || '';
@@ -1388,9 +1366,8 @@ $('profileSave').onclick = () => {
 $('profileCancel').onclick = () => { profileDraft = null; $('profileModal').style.display = 'none'; };
 $('profileName').addEventListener('keydown', e => { if (e.key === 'Enter') $('profileSave').click(); });
 
-// Выход из аккаунта
 $('profileLogout').onclick = () => {
-  if (!confirm('Выйти из аккаунта? При следующем входе нужно будет ввести имя и @username заново.')) return;
+  if (!confirm('Выйти из аккаунта? При следующем входе нужно будет ввести @username заново.')) return;
   localStorage.removeItem('messenger_me');
   location.reload();
 };
@@ -1517,7 +1494,7 @@ inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey)
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
-  if (!socket.connected) return;
+  if (!socket.connected || !me) return;
   clearTimeout(typingTimeout);
   typingTimeout = setTimeout(() => { socket.emit('typing', { to: currentRoomId, from: me.userId, fromName: me.name }); }, 200);
 });
@@ -1618,69 +1595,3 @@ messagesEl.addEventListener('click', e => {
   lb.innerHTML = `<img src="${img.dataset.img}" alt="">`;
   lb.onclick = () => lb.remove();
   document.body.appendChild(lb);
-});
-
-/* ============================================================
-   МОБИЛЬНАЯ НАВИГАЦИЯ
-   ============================================================ */
-$('backBtn').onclick = () => $('sidebar').classList.remove('hidden');
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) { markCurrentAsRead(); document.title = 'Мессенджер'; }
-});
-
-socket.on('connect', () => { connected = true; });
-socket.on('disconnect', () => { connected = false; });
-
-/* ============================================================
-   ФИКС МОБИЛЬНОЙ КЛАВИАТУРЫ
-   ============================================================ */
-function isMobile() { return window.innerWidth <= 720; }
-
-function syncAppHeight() {
-  if (!isMobile()) {
-    const app = $('app');
-    if (app) app.style.height = '';
-    return;
-  }
-  const vv = window.visualViewport;
-  const h = vv ? vv.height : window.innerHeight;
-  const app = $('app');
-  if (app) app.style.height = h + 'px';
-}
-
-if (window.visualViewport) {
-  const vv = window.visualViewport;
-  vv.addEventListener('resize', syncAppHeight);
-  vv.addEventListener('scroll', syncAppHeight);
-}
-window.addEventListener('resize', syncAppHeight);
-window.addEventListener('orientationchange', () => setTimeout(syncAppHeight, 300));
-
-inputEl.addEventListener('focus', () => {
-  setTimeout(() => {
-    syncAppHeight();
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }, 300);
-});
-inputEl.addEventListener('blur', () => {
-  setTimeout(syncAppHeight, 100);
-});
-
-syncAppHeight();
-
-/* ============================================================
-   СТАРТ
-   ============================================================ */
-// Пытаемся войти автоматически. Если данных нет — показываем форму.
-tryAutoLogin();
-
-// Если через 5 секунд так и не зашли — прячем загрузчик
-setTimeout(() => {
-  if (!bootDone) {
-    hideBoot();
-    if (!me) $('nameModal').style.display = 'flex';
-  }
-}, 5000);
-</script>
-</body>
-</html>
