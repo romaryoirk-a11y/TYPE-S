@@ -107,6 +107,13 @@
     transition: background 0.15s;
   }
   .modal-card .cancel-btn:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .modal-card .danger-btn {
+    width: 100%; margin-top: 8px; padding: 12px; border: 1.5px solid rgba(255,92,124,0.3);
+    background: rgba(255,92,124,0.06);
+    color: var(--danger); font-size: 14px; font-weight: 600; cursor: pointer;
+    border-radius: 12px; transition: background 0.15s, border 0.15s;
+  }
+  .modal-card .danger-btn:hover { background: rgba(255,92,124,0.14); border-color: rgba(255,92,124,0.5); }
 
   .type-select { display: flex; gap: 10px; margin-top: 6px; }
   .type-select .type-opt {
@@ -527,6 +534,21 @@
   .search-result-item .add-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124,92,255,0.5); }
   .empty-search { text-align: center; padding: 24px 12px; color: var(--text-mute); font-size: 13.5px; }
 
+  /* ==== ЗАГРУЗЧИК ПРИ АВТОВХОДЕ ==== */
+  .boot-screen {
+    position: fixed; inset: 0; z-index: 900;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px; background: #05060d;
+    transition: opacity 0.4s ease;
+  }
+  .boot-screen.fade-out { opacity: 0; pointer-events: none; }
+  .boot-spinner {
+    width: 48px; height: 48px; border: 3px solid rgba(124,92,255,0.2);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  .boot-text { color: var(--text-dim); font-size: 14px; }
+
   /* ============================================================
      МОБИЛЬНАЯ ВЕРСИЯ + ФИКС КЛАВИАТУРЫ
      ============================================================ */
@@ -554,7 +576,6 @@
     .messages { padding: 16px; }
     .file-name { max-width: 140px; }
 
-    /* Фикс: чат-окно и поле ввода не улетают за клавиатуру */
     .chat-window {
       height: 100%;
       max-height: 100%;
@@ -571,7 +592,6 @@
       flex-shrink: 0;
       padding-bottom: max(16px, env(safe-area-inset-bottom));
     }
-    /* iOS Safari: font-size >= 16px отключает авто-зум при фокусе */
     .input-wrapper textarea,
     .modal-card input,
     .modal-card textarea,
@@ -579,7 +599,6 @@
     .input-group input {
       font-size: 16px;
     }
-    /* Модалки на мобильном */
     .modal-overlay { padding: 12px; }
     .modal-card { padding: 24px 20px; border-radius: 20px; max-height: 85dvh; }
   }
@@ -588,7 +607,14 @@
 </head>
 <body>
 
-<div class="modal-overlay" id="nameModal">
+<!-- ЗАГРУЗЧИК ДЛЯ АВТОВХОДА -->
+<div class="boot-screen" id="bootScreen">
+  <div class="boot-spinner"></div>
+  <div class="boot-text">Загрузка…</div>
+</div>
+
+<!-- ЭКРАН ВХОДА -->
+<div class="modal-overlay" id="nameModal" style="display:none">
   <div class="modal-card">
     <h2>Добро пожаловать 👋</h2>
     <div class="sub">Придумайте имя и уникальный @username</div>
@@ -695,6 +721,7 @@
 
     <button class="primary-btn" id="profileSave">Сохранить</button>
     <button class="cancel-btn" id="profileCancel">Отмена</button>
+    <button class="danger-btn" id="profileLogout">Выйти из аккаунта</button>
   </div>
 </div>
 
@@ -789,6 +816,7 @@ let pushEnabled = false;
 let listenersRegistered = false;
 let profileDraft = null;
 let currentFilter = '';
+let bootDone = false;
 
 const $ = id => document.getElementById(id);
 const messagesEl = $('messages');
@@ -807,12 +835,9 @@ function avatarHtml(user) { if (user && user.avatar) return `<img src="${user.av
 function avatarStyle(user) { return user.avatar ? 'background:#1a1d35' : `background:${user.color}`; }
 
 /* ============================================================
-   ВХОД
+   ВХОД — с автосохранением
    ============================================================ */
 const savedMe = (() => { try { return JSON.parse(localStorage.getItem('messenger_me') || 'null'); } catch { return null; } })();
-if (savedMe?.name) $('nameInput').value = savedMe.name;
-if (savedMe?.username) $('usernameInput').value = savedMe.username;
-$('nameInput').focus();
 
 function validateUsername(v) {
   const clean = String(v || '').replace(/^@/, '').trim();
@@ -823,6 +848,7 @@ function validateUsername(v) {
   if (!/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/.test(clean)) return { ok: false, msg: 'Только латиница, цифры и _', cls: 'err' };
   return { ok: true, msg: '@' + clean, cls: 'ok' };
 }
+
 $('usernameInput').addEventListener('input', e => {
   e.target.value = e.target.value.replace(/[^a-zA-Z0-9_]/g, '').replace(/^@+/, '');
   const v = validateUsername(e.target.value);
@@ -840,16 +866,31 @@ $('nameSubmit').onclick = () => {
   if (!name) { toast('Введите имя'); return; }
   const v = validateUsername(username);
   if (!v.ok) { toast('Некорректный @username'); return; }
+  enterApp({ name, username });
+};
 
-  const sameUser = savedMe && savedMe.name === name && savedMe.username === username;
-  if (sameUser) { me = savedMe; }
-  else {
-    const userId = savedMe?.userId || ('u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36));
+// Открыть приложение с данными (новыми или сохранёнными)
+function enterApp(data) {
+  const existing = savedMe;
+  const sameUser = existing && existing.name === data.name && existing.username === data.username;
+
+  if (sameUser) {
+    me = existing;
+  } else {
+    const userId = existing?.userId || ('u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36));
     const colors = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-    const initials = name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || name.slice(0, 2).toUpperCase();
-    me = { userId, name, username, color: `linear-gradient(135deg,${colors[0]},${colors[1]})`, initials, avatar: null };
-    localStorage.setItem('messenger_me', JSON.stringify(me));
+    const initials = data.name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || data.name.slice(0, 2).toUpperCase();
+    me = {
+      userId,
+      name: data.name,
+      username: data.username,
+      color: `linear-gradient(135deg,${colors[0]},${colors[1]})`,
+      initials,
+      avatar: null
+    };
   }
+  // Сохраняем в localStorage
+  localStorage.setItem('messenger_me', JSON.stringify(me));
 
   $('nameModal').style.display = 'none';
   $('app').style.display = 'flex';
@@ -857,7 +898,49 @@ $('nameSubmit').onclick = () => {
   registerSocketListeners();
   sendJoin();
   initPushState();
-};
+  hideBoot();
+}
+
+// Автовход при загрузке, если уже был вход
+function tryAutoLogin() {
+  if (!savedMe || !savedMe.name || !savedMe.username) {
+    // Нет сохранённых данных — показываем форму
+    hideBoot();
+    $('nameModal').style.display = 'flex';
+    setTimeout(() => $('nameInput').focus(), 100);
+    return;
+  }
+
+  // Восстанавливаем поля формы на случай логаута
+  $('nameInput').value = savedMe.name;
+  $('usernameInput').value = savedMe.username;
+
+  // Автоматически входим
+  me = savedMe;
+  renderMeAvatar();
+  $('app').style.display = 'flex';
+  registerSocketListeners();
+  sendJoin();
+  initPushState();
+  hideBoot();
+}
+
+function hideBoot() {
+  if (bootDone) return;
+  bootDone = true;
+  const bs = $('bootScreen');
+  bs.classList.add('fade-out');
+  setTimeout(() => bs.remove(), 500);
+}
+
+// Если join не удался (username занят на сервере) — вернуть форму
+function backToLogin() {
+  localStorage.removeItem('messenger_me');
+  me = null;
+  $('app').style.display = 'none';
+  $('nameModal').style.display = 'flex';
+  setTimeout(() => $('nameInput').focus(), 100);
+}
 
 function sendJoin() {
   if (!me || !socket.connected) return;
@@ -881,12 +964,15 @@ function registerSocketListeners() {
 
   socket.on('join-error', ({ text }) => {
     toast('⚠️ ' + text, 4000);
-    $('app').style.display = 'none';
-    $('nameModal').style.display = 'flex';
+    // Возвращаем на форму входа — сохранённые данные не подходят
+    backToLogin();
   });
 
   socket.on('joined', ({ userId, username }) => {
-    if (me.username !== username) { me.username = username; localStorage.setItem('messenger_me', JSON.stringify(me)); }
+    if (me && me.username !== username) {
+      me.username = username;
+      localStorage.setItem('messenger_me', JSON.stringify(me));
+    }
   });
 
   socket.on('history', msgs => { allMessages = Array.isArray(msgs) ? msgs : []; renderMessages(); renderChats(); });
@@ -1302,6 +1388,13 @@ $('profileSave').onclick = () => {
 $('profileCancel').onclick = () => { profileDraft = null; $('profileModal').style.display = 'none'; };
 $('profileName').addEventListener('keydown', e => { if (e.key === 'Enter') $('profileSave').click(); });
 
+// Выход из аккаунта
+$('profileLogout').onclick = () => {
+  if (!confirm('Выйти из аккаунта? При следующем входе нужно будет ввести имя и @username заново.')) return;
+  localStorage.removeItem('messenger_me');
+  location.reload();
+};
+
 /* ============================================================
    ПОИСК ПОЛЬЗОВАТЕЛЯ
    ============================================================ */
@@ -1573,8 +1666,21 @@ inputEl.addEventListener('blur', () => {
   setTimeout(syncAppHeight, 100);
 });
 
-// Первичная синхронизация
 syncAppHeight();
+
+/* ============================================================
+   СТАРТ
+   ============================================================ */
+// Пытаемся войти автоматически. Если данных нет — показываем форму.
+tryAutoLogin();
+
+// Если через 5 секунд так и не зашли — прячем загрузчик
+setTimeout(() => {
+  if (!bootDone) {
+    hideBoot();
+    if (!me) $('nameModal').style.display = 'flex';
+  }
+}, 5000);
 </script>
 </body>
 </html>
