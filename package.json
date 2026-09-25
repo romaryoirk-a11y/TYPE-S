@@ -1,7 +1,7 @@
 {
   "name": "messenger",
-  "version": "2.1.0",
-  "description": "Простой мессенджер с real-time, группами, каналами, файлами и Web Push",
+  "version": "2.2.0",
+  "description": "Мессенджер с real-time, группами, каналами, файлами и Web Push",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -16,6 +16,5 @@
     "socket.io": "^4.7.2",
     "web-push": "^3.6.7"
   },
-  "keywords": ["messenger", "chat", "socket.io", "realtime"],
   "license": "MIT"
 }
