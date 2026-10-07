@@ -6,13 +6,20 @@ const http = require('http');
 const { Server } = require('socket.io');
 const multer = require('multer');
 const webpush = require('web-push');
+const { MongoClient } = require('mongodb');
 const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
 
 console.log('🟢 Запуск сервера...');
 console.log('📦 Node version:', process.version);
 console.log('🌍 PORT env:', process.env.PORT || '(не задан)');
+
+// ============================================================
+// ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+// ============================================================
+if (!process.env.MONGODB_URI) {
+  console.error('❌ MONGODB_URI не задана!');
+  process.exit(1);
+}
 
 // ============================================================
 // EXPRESS + SOCKET.IO
@@ -29,126 +36,175 @@ const io = new Server(server, {
 });
 
 // ============================================================
-// ПУТИ И ПАПКИ
+// MONGODB
 // ============================================================
-const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
-const DATA_DIR = path.join(__dirname, 'data');
-const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
-const SUBS_FILE = path.join(DATA_DIR, 'subscriptions.json');
-const VAPID_FILE = path.join(DATA_DIR, 'vapid.json');
+const mongoClient = new MongoClient(process.env.MONGODB_URI, {
+  serverSelectionTimeoutMS: 10000,
+  connectTimeoutMS: 10000
+});
 
-try {
-  [UPLOADS_DIR, DATA_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
-  console.log('📁 Папки готовы');
-} catch (e) {
-  console.error('❌ Ошибка создания папок:', e);
+let db;
+let usersCol, messagesCol, roomsCol, subsCol, configCol;
+
+async function initDB() {
+  console.log('🔌 Подключение к MongoDB...');
+  await mongoClient.connect();
+  db = mongoClient.db('messenger');
+  usersCol = db.collection('users');
+  messagesCol = db.collection('messages');
+  roomsCol = db.collection('rooms');
+  subsCol = db.collection('subscriptions');
+  configCol = db.collection('config');
+
+  await usersCol.createIndex({ username: 1 }, { unique: true, sparse: true });
+  await usersCol.createIndex({ userId: 1 }, { unique: true });
+  await messagesCol.createIndex({ timestamp: -1 });
+  await messagesCol.createIndex({ to: 1, timestamp: -1 });
+  await messagesCol.createIndex({ from: 1, timestamp: -1 });
+  await roomsCol.createIndex({ id: 1 }, { unique: true });
+
+  console.log('✅ MongoDB готова');
 }
 
 // ============================================================
-// VAPID ДЛЯ WEB PUSH
-// ============================================================
-let vapidKeys;
-try {
-  if (fs.existsSync(VAPID_FILE)) {
-    vapidKeys = JSON.parse(fs.readFileSync(VAPID_FILE, 'utf8'));
-  } else {
-    vapidKeys = webpush.generateVAPIDKeys();
-    fs.writeFileSync(VAPID_FILE, JSON.stringify(vapidKeys, null, 2));
-    console.log('🔑 Сгенерированы VAPID-ключи');
-  }
-  webpush.setVapidDetails('mailto:admin@example.com', vapidKeys.publicKey, vapidKeys.privateKey);
-} catch (e) {
-  console.error('❌ Ошибка VAPID, используем временные ключи:', e.message);
-  vapidKeys = webpush.generateVAPIDKeys();
-  try {
-    webpush.setVapidDetails('mailto:admin@example.com', vapidKeys.publicKey, vapidKeys.privateKey);
-  } catch (err) { console.error('Критическая ошибка VAPID:', err); }
-}
-
-// ============================================================
-// ЗАГРУЗКА ДАННЫХ
+// ДАННЫЕ
 // ============================================================
 let messages = [];
 let knownUsers = {};
 let rooms = {};
 let subscriptions = {};
 
-try {
-  if (fs.existsSync(MESSAGES_FILE)) messages = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
-} catch (e) { console.error('messages.json:', e.message); messages = []; }
+async function loadData() {
+  console.log('📥 Загрузка данных из MongoDB...');
 
-try {
-  if (fs.existsSync(USERS_FILE)) knownUsers = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-} catch (e) { console.error('users.json:', e.message); knownUsers = {}; }
+  const usersArr = await usersCol.find({}).toArray();
+  knownUsers = {};
+  usersArr.forEach(u => { knownUsers[u.userId] = u; });
 
-try {
-  if (fs.existsSync(ROOMS_FILE)) rooms = JSON.parse(fs.readFileSync(ROOMS_FILE, 'utf8'));
-} catch (e) { console.error('rooms.json:', e.message); rooms = {}; }
+  const roomsArr = await roomsCol.find({}).toArray();
+  rooms = {};
+  roomsArr.forEach(r => { rooms[r.id] = r; });
 
-try {
-  if (fs.existsSync(SUBS_FILE)) subscriptions = JSON.parse(fs.readFileSync(SUBS_FILE, 'utf8'));
-} catch (e) { console.error('subscriptions.json:', e.message); subscriptions = {}; }
+  const subsArr = await subsCol.find({}).toArray();
+  subscriptions = {};
+  subsArr.forEach(s => { subscriptions[s.userId] = s.subscriptions || []; });
 
-if (!Array.isArray(messages)) messages = [];
-if (typeof knownUsers !== 'object' || knownUsers === null || Array.isArray(knownUsers)) knownUsers = {};
-if (typeof rooms !== 'object' || rooms === null || Array.isArray(rooms)) rooms = {};
-if (typeof subscriptions !== 'object' || subscriptions === null || Array.isArray(subscriptions)) subscriptions = {};
+  const msgsArr = await messagesCol.find({}).sort({ timestamp: -1 }).limit(10000).toArray();
+  messages = msgsArr.reverse();
 
-console.log('📊 Загружено:',
-  Object.keys(knownUsers).length, 'пользователей,',
-  messages.length, 'сообщений,',
-  Object.keys(rooms).length, 'комнат');
+  console.log(`✅ Загружено: ${Object.keys(knownUsers).length} польз., ${messages.length} сообщ., ${Object.keys(rooms).length} комнат`);
+}
 
 // ============================================================
 // СОХРАНЕНИЕ
 // ============================================================
-const saveMessages = () => { try { fs.writeFile(MESSAGES_FILE, JSON.stringify(messages), () => {}); } catch (e) {} };
-const saveUsers = () => { try { fs.writeFile(USERS_FILE, JSON.stringify(knownUsers), () => {}); } catch (e) {} };
-const saveRooms = () => { try { fs.writeFile(ROOMS_FILE, JSON.stringify(rooms), () => {}); } catch (e) {} };
-const saveSubs = () => { try { fs.writeFile(SUBS_FILE, JSON.stringify(subscriptions), () => {}); } catch (e) {} };
+async function saveUser(userId) {
+  try {
+    const u = knownUsers[userId];
+    if (!u) return;
+    await usersCol.updateOne({ userId }, { $set: u }, { upsert: true });
+  } catch (e) { console.error('saveUser:', e.message); }
+}
+
+async function saveMessage(msg) {
+  try {
+    await messagesCol.insertOne(msg);
+    const count = await messagesCol.countDocuments();
+    if (count > 50000) {
+      const old = await messagesCol.find({}).sort({ timestamp: 1 }).limit(count - 50000).toArray();
+      const oldIds = old.map(o => o._id);
+      await messagesCol.deleteMany({ _id: { $in: oldIds } });
+    }
+  } catch (e) { console.error('saveMessage:', e.message); }
+}
+
+async function updateMessage(id, updates) {
+  try {
+    await messagesCol.updateOne({ id }, { $set: updates });
+  } catch (e) { console.error('updateMessage:', e.message); }
+}
+
+async function saveRoom(roomId) {
+  try {
+    const r = rooms[roomId];
+    if (!r) return;
+    await roomsCol.replaceOne({ id: roomId }, r, { upsert: true });
+  } catch (e) { console.error('saveRoom:', e.message); }
+}
+
+async function deleteRoom(roomId) {
+  try {
+    await roomsCol.deleteOne({ id: roomId });
+  } catch (e) { console.error('deleteRoom:', e.message); }
+}
+
+async function saveSubs(userId) {
+  try {
+    const arr = subscriptions[userId] || [];
+    await subsCol.updateOne({ userId }, { $set: { userId, subscriptions: arr } }, { upsert: true });
+  } catch (e) { console.error('saveSubs:', e.message); }
+}
 
 // ============================================================
-// ОНЛАЙН-ПОЛЬЗОВАТЕЛИ
+// VAPID
 // ============================================================
-const online = new Map();
+let vapidKeys;
+
+async function initVapid() {
+  try {
+    const doc = await configCol.findOne({ _id: 'vapid' });
+    if (doc && doc.publicKey && doc.privateKey) {
+      vapidKeys = { publicKey: doc.publicKey, privateKey: doc.privateKey };
+      console.log('🔑 VAPID-ключи загружены');
+    } else {
+      vapidKeys = webpush.generateVAPIDKeys();
+      await configCol.updateOne(
+        { _id: 'vapid' },
+        { $set: { publicKey: vapidKeys.publicKey, privateKey: vapidKeys.privateKey } },
+        { upsert: true }
+      );
+      console.log('🔑 Сгенерированы VAPID-ключи');
+    }
+    webpush.setVapidDetails('mailto:admin@example.com', vapidKeys.publicKey, vapidKeys.privateKey);
+  } catch (e) {
+    console.error('Ошибка VAPID:', e.message);
+    vapidKeys = webpush.generateVAPIDKeys();
+  }
+}
 
 // ============================================================
 // MIDDLEWARE
 // ============================================================
-app.use(express.json({ limit: '1mb' }));
-
-// Отключаем кэширование HTML/JS
+app.use(express.json({ limit: '30mb' }));
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   next();
 });
-
-// Логирование запросов к socket.io
 app.use((req, res, next) => {
   if (req.path.includes('socket.io')) console.log('🌐', req.method, req.path);
   next();
 });
-
-// Статика
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false }));
 
 // ============================================================
 // HTTP ROUTES
 // ============================================================
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   try {
+    const msgCount = await messagesCol.countDocuments();
+    const userCount = await usersCol.countDocuments();
+    const roomCount = await roomsCol.countDocuments();
     res.json({
       ok: true,
-      version: '2.2.0',
+      version: '3.1.0',
+      storage: 'mongodb-only',
       uptime: Math.round(process.uptime()),
       memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + ' MB',
-      users: Object.keys(knownUsers).length,
-      rooms: Object.keys(rooms).length,
-      messages: messages.length,
+      users: userCount,
+      rooms: roomCount,
+      messages: msgCount,
       online: online.size,
       socketio: 'ready'
     });
@@ -158,87 +214,54 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/test-socketio', (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8"><title>Test Socket.IO</title>
-<style>
-  body { font-family: -apple-system, system-ui, sans-serif; background: #0a0b16; color: #e8eaf6; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.6; }
-  a { color: #7c5cff; }
-  h1 { color: #7c5cff; margin-bottom: 20px; }
-  h2 { margin-top: 30px; font-size: 18px; }
-  code { background: #1e2340; padding: 3px 8px; border-radius: 4px; color: #b8a6ff; font-size: 13px; }
-  .status { padding: 12px 18px; border-radius: 10px; margin: 14px 0; font-weight: 500; }
-  .ok { background: rgba(46,204,113,0.15); color: #2ecc71; }
-  .err { background: rgba(255,92,124,0.15); color: #ff5c7c; }
-  .box { background: #1e2340; padding: 16px; border-radius: 10px; margin: 12px 0; }
-</style></head><body>
-<h1>✅ Тест Socket.IO</h1>
-<div class="status ok">Сервер работает и отдаёт эту страницу</div>
-
-<h2>Проверка 1: socket.io.js</h2>
-<div class="box">
-  <p>Открой: <a href="/socket.io/socket.io.js" target="_blank">/socket.io/socket.io.js</a></p>
-  <p>Должен открыться JS-код (тысячи строк). <b>404 = сломан Socket.IO.</b></p>
-</div>
-
-<h2>Проверка 2: health</h2>
-<div class="box">
-  <p>Открой: <a href="/health" target="_blank">/health</a></p>
-  <p>JSON должен содержать <code>"socketio":"ready"</code> и <code>"version":"2.2.0"</code></p>
-</div>
-
-<h2>Проверка 3: главное приложение</h2>
-<div class="box">
-  <p>Открой: <a href="/" target="_blank">/</a></p>
-  <p>Если крутится загрузка — жми <code>Ctrl+Shift+R</code> для жёсткого обновления.</p>
-</div>
-
-<h2>Проверка 4: клиентская консоль</h2>
-<div class="box">
-  <p>На главной странице: <code>F12</code> → Console → смотри логи со эмодзи.</p>
-  <p>Должно быть: <code>✅ Socket подключён: xxx</code></p>
-</div>
+  res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Test</title>
+<style>body{font-family:sans-serif;background:#0a0b16;color:#e8eaf6;padding:40px;max-width:800px;margin:auto}
+a{color:#7c5cff}h1{color:#7c5cff}.ok{background:rgba(46,204,113,0.15);color:#2ecc71;padding:12px 18px;border-radius:10px;margin:14px 0}
+.box{background:#1e2340;padding:16px;border-radius:10px;margin:12px 0}</style></head><body>
+<h1>✅ Тест</h1>
+<div class="ok">Сервер работает. Все данные (включая файлы) хранятся в MongoDB.</div>
+<div class="box"><p>Health: <a href="/health">/health</a></p></div>
+<div class="box"><p>Socket.IO: <a href="/socket.io/socket.io.js">/socket.io/socket.io.js</a></p></div>
+<div class="box"><p>Приложение: <a href="/">/</a></p></div>
 </body></html>`);
 });
 
 app.get('/vapid-public-key', (req, res) => {
-  try {
-    res.json({ key: vapidKeys.publicKey });
-  } catch (e) {
-    res.status(500).json({ error: 'VAPID not ready' });
-  }
+  res.json({ key: vapidKeys.publicKey });
 });
 
 // ============================================================
-// ЗАГРУЗКА ФАЙЛОВ
+// ЗАГРУЗКА ФАЙЛОВ → BASE64 В MONGODB
 // ============================================================
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    cb(null, crypto.randomBytes(10).toString('hex') + ext);
-  }
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }  // 10 МБ — безопасно под лимит документа MongoDB 16 МБ
 });
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } });
 
-app.post('/upload', upload.single('file'), (req, res) => {
+app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+
+    // Конвертируем буфер в data URL (base64)
+    const base64 = req.file.buffer.toString('base64');
+    const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
+
     res.json({
-      url: '/uploads/' + req.file.filename,
+      url: dataUrl,
       name: req.file.originalname,
       type: req.file.mimetype,
       size: req.file.size
     });
   } catch (e) {
     console.error('upload error:', e);
-    res.status(500).json({ error: 'Ошибка загрузки' });
+    res.status(500).json({ error: 'Ошибка обработки файла' });
   }
 });
 
 // ============================================================
 // PUSH ПОДПИСКИ
 // ============================================================
-app.post('/subscribe', (req, res) => {
+app.post('/subscribe', async (req, res) => {
   try {
     const { userId, subscription } = req.body || {};
     if (!userId || !subscription || !subscription.endpoint) {
@@ -247,7 +270,7 @@ app.post('/subscribe', (req, res) => {
     if (!subscriptions[userId]) subscriptions[userId] = [];
     if (!subscriptions[userId].some(s => s.endpoint === subscription.endpoint)) {
       subscriptions[userId].push(subscription);
-      saveSubs();
+      await saveSubs(userId);
     }
     res.json({ ok: true });
   } catch (e) {
@@ -256,12 +279,12 @@ app.post('/subscribe', (req, res) => {
   }
 });
 
-app.post('/unsubscribe', (req, res) => {
+app.post('/unsubscribe', async (req, res) => {
   try {
     const { userId, endpoint } = req.body || {};
     if (subscriptions[userId]) {
       subscriptions[userId] = subscriptions[userId].filter(s => s.endpoint !== endpoint);
-      saveSubs();
+      await saveSubs(userId);
     }
     res.json({ ok: true });
   } catch (e) {
@@ -272,6 +295,7 @@ app.post('/unsubscribe', (req, res) => {
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
+const online = new Map();
 const safeUsername = (u) => String(u || '').replace(/^@/, '').trim();
 
 function contactListFor(userId) {
@@ -281,12 +305,8 @@ function contactListFor(userId) {
     const c = knownUsers[cid];
     if (!c) return null;
     return {
-      userId: cid,
-      name: c.name,
-      username: c.username,
-      color: c.color,
-      initials: c.initials,
-      avatar: c.avatar || null,
+      userId: cid, name: c.name, username: c.username,
+      color: c.color, initials: c.initials, avatar: c.avatar || null,
       online: online.has(cid)
     };
   }).filter(Boolean);
@@ -298,14 +318,10 @@ function emitUserListTo(userId) {
 }
 
 function broadcastUserLists() {
-  try {
-    Object.keys(knownUsers).forEach(uid => emitUserListTo(uid));
-  } catch (e) { console.error('broadcastUserLists:', e); }
+  try { Object.keys(knownUsers).forEach(uid => emitUserListTo(uid)); } catch (e) {}
 }
 
-function allUserIds() {
-  return Object.keys(knownUsers);
-}
+function allUserIds() { return Object.keys(knownUsers); }
 
 function visibleMessagesFor(userId) {
   return messages.filter(m => {
@@ -340,22 +356,19 @@ function emitToUsers(userIds, event, data) {
 async function sendPush(userId, payload) {
   const subs = subscriptions[userId] || [];
   for (const sub of subs) {
-    try {
-      await webpush.sendNotification(sub, JSON.stringify(payload));
-    } catch (e) {
+    try { await webpush.sendNotification(sub, JSON.stringify(payload)); }
+    catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) {
         subscriptions[userId] = subscriptions[userId].filter(s => s.endpoint !== sub.endpoint);
-        saveSubs();
+        await saveSubs(userId);
       }
     }
   }
 }
 
-function broadcastRooms() {
-  io.emit('rooms', Object.values(rooms));
-}
+function broadcastRooms() { io.emit('rooms', Object.values(rooms)); }
 
-function ensureContacts(a, b) {
+async function ensureContacts(a, b) {
   if (!knownUsers[a] || !knownUsers[b]) return;
   if (!Array.isArray(knownUsers[a].contacts)) knownUsers[a].contacts = [];
   if (!Array.isArray(knownUsers[b].contacts)) knownUsers[b].contacts = [];
@@ -363,7 +376,7 @@ function ensureContacts(a, b) {
   if (!knownUsers[a].contacts.includes(b)) { knownUsers[a].contacts.push(b); changed = true; }
   if (!knownUsers[b].contacts.includes(a)) { knownUsers[b].contacts.push(a); changed = true; }
   if (changed) {
-    saveUsers();
+    await Promise.all([saveUser(a), saveUser(b)]);
     emitUserListTo(a);
     emitUserListTo(b);
   }
@@ -373,10 +386,9 @@ function ensureContacts(a, b) {
 // SOCKET.IO
 // ============================================================
 io.on('connection', socket => {
-  console.log('🔌 Подключение:', socket.id, '| transport:', socket.conn.transport.name);
+  console.log('🔌 Подключение:', socket.id);
 
-  // --- ВХОД ---
-  socket.on('join', ({ userId, name, username, color, initials }) => {
+  socket.on('join', async ({ userId, name, username, color, initials }) => {
     try {
       if (!userId || !name || !username) {
         socket.emit('join-error', { text: 'Не хватает данных' });
@@ -392,8 +404,7 @@ io.on('connection', socket => {
         u && u.username && u.username.toLowerCase() === cleanUsername.toLowerCase()
       );
 
-      let finalUserId;
-      let isNewAccount = false;
+      let finalUserId, isNewAccount = false;
 
       if (existingEntry) {
         finalUserId = existingEntry[0];
@@ -409,6 +420,7 @@ io.on('connection', socket => {
 
       if (isNewAccount) {
         knownUsers[finalUserId] = {
+          userId: finalUserId,
           name, username: cleanUsername, color, initials,
           avatar: null, contacts: []
         };
@@ -418,7 +430,7 @@ io.on('connection', socket => {
         if (!u.initials) u.initials = initials;
         if (!Array.isArray(u.contacts)) u.contacts = [];
       }
-      saveUsers();
+      await saveUser(finalUserId);
 
       const user = knownUsers[finalUserId];
 
@@ -428,10 +440,8 @@ io.on('connection', socket => {
         userId: finalUserId,
         user: {
           userId: finalUserId,
-          name: user.name,
-          username: user.username,
-          color: user.color,
-          initials: user.initials,
+          name: user.name, username: user.username,
+          color: user.color, initials: user.initials,
           avatar: user.avatar || null
         },
         isNewAccount
@@ -444,8 +454,7 @@ io.on('connection', socket => {
     }
   });
 
-  // --- ОБНОВЛЕНИЕ ПРОФИЛЯ ---
-  socket.on('update-profile', ({ userId, name, color, initials, avatar }) => {
+  socket.on('update-profile', async ({ userId, name, color, initials, avatar }) => {
     try {
       if (!userId || !knownUsers[userId]) return;
       knownUsers[userId] = {
@@ -455,13 +464,12 @@ io.on('connection', socket => {
         ...(initials && { initials }),
         ...(avatar !== undefined && { avatar })
       };
-      saveUsers();
+      await saveUser(userId);
       broadcastUserLists();
       io.emit('user-updated', { userId, user: knownUsers[userId] });
     } catch (e) { console.error('update-profile:', e); }
   });
 
-  // --- ПОИСК ПОЛЬЗОВАТЕЛЯ ---
   socket.on('search-user', ({ query, byUserId }) => {
     try {
       const q = safeUsername(query).toLowerCase();
@@ -470,43 +478,36 @@ io.on('connection', socket => {
         .filter(([id, u]) => id !== byUserId && u.username && u.username.toLowerCase().includes(q))
         .slice(0, 10)
         .map(([id, u]) => ({
-          userId: id,
-          name: u.name,
-          username: u.username,
-          color: u.color,
-          initials: u.initials,
-          avatar: u.avatar || null,
+          userId: id, name: u.name, username: u.username,
+          color: u.color, initials: u.initials, avatar: u.avatar || null,
           online: online.has(id)
         }));
       socket.emit('search-result', { query, results });
     } catch (e) { console.error('search-user:', e); }
   });
 
-  // --- ДОБАВИТЬ КОНТАКТ ---
-  socket.on('add-contact', ({ userId, contactId }) => {
+  socket.on('add-contact', async ({ userId, contactId }) => {
     try {
       if (!userId || !contactId || userId === contactId) return;
       if (!knownUsers[userId] || !knownUsers[contactId]) return;
-      ensureContacts(userId, contactId);
+      await ensureContacts(userId, contactId);
       socket.emit('contact-added', { userId: contactId });
     } catch (e) { console.error('add-contact:', e); }
   });
 
-  // --- УДАЛИТЬ КОНТАКТ ---
-  socket.on('remove-contact', ({ userId, contactId }) => {
+  socket.on('remove-contact', async ({ userId, contactId }) => {
     try {
       if (!userId || !contactId) return;
       if (knownUsers[userId] && Array.isArray(knownUsers[userId].contacts)) {
         knownUsers[userId].contacts = knownUsers[userId].contacts.filter(x => x !== contactId);
-        saveUsers();
+        await saveUser(userId);
         emitUserListTo(userId);
         socket.emit('contact-removed', { userId: contactId });
       }
     } catch (e) { console.error('remove-contact:', e); }
   });
 
-  // --- СООБЩЕНИЕ ---
-  socket.on('message', msg => {
+  socket.on('message', async msg => {
     try {
       if (!msg || !msg.id || !msg.from || !msg.to) return;
       if (messages.some(m => m.id === msg.id)) return;
@@ -521,12 +522,11 @@ io.on('connection', socket => {
         return;
       }
 
-      if (!isPublic && !isRoom) ensureContacts(msg.from, msg.to);
+      if (!isPublic && !isRoom) await ensureContacts(msg.from, msg.to);
 
       let recipients;
-      if (isPublic) {
-        recipients = allUserIds();
-      } else if (isRoom) {
+      if (isPublic) recipients = allUserIds();
+      else if (isRoom) {
         if (!Array.isArray(room.members) || !room.members.includes(msg.from)) return;
         recipients = room.members.slice();
       } else {
@@ -535,42 +535,33 @@ io.on('connection', socket => {
 
       const ts = msg.timestamp || Date.now();
       const full = {
-        id: msg.id,
-        to: msg.to,
-        from: msg.from,
-        fromName: msg.fromName,
+        id: msg.id, to: msg.to, from: msg.from, fromName: msg.fromName,
         text: String(msg.text || '').slice(0, 4000),
         file: msg.file || null,
         timestamp: ts,
         time: new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        deliveredTo: [],
-        readBy: []
+        deliveredTo: [], readBy: []
       };
 
       messages.push(full);
       if (messages.length > 10000) messages = messages.slice(-10000);
-      saveMessages();
+      saveMessage(full);
       emitToUsers(recipients, 'message', full);
 
       recipients.forEach(uid => {
         if (uid === msg.from) return;
         if (!online.has(uid)) {
-          const title = isPublic
-            ? '🌐 Общий чат'
-            : isRoom
-              ? (room.type === 'channel' ? `📢 ${room.name}` : `👥 ${room.name}`)
-              : `💬 ${msg.fromName}`;
-          const body = msg.file
-            ? (msg.text ? msg.text.slice(0, 80) + ' 📎' : '📎 ' + msg.file.name)
-            : msg.text.slice(0, 120);
+          const title = isPublic ? '🌐 Общий чат'
+            : isRoom ? (room.type === 'channel' ? `📢 ${room.name}` : `👥 ${room.name}`)
+            : `💬 ${msg.fromName}`;
+          const body = msg.file ? (msg.text ? msg.text.slice(0, 80) + ' 📎' : '📎 ' + msg.file.name) : msg.text.slice(0, 120);
           sendPush(uid, { title, body, data: { roomId: msg.to }, tag: msg.to });
         }
       });
     } catch (e) { console.error('message:', e); }
   });
 
-  // --- ДОСТАВЛЕНО ---
-  socket.on('delivered', ({ userId, messageIds }) => {
+  socket.on('delivered', async ({ userId, messageIds }) => {
     try {
       if (!userId || !Array.isArray(messageIds)) return;
       const updated = [];
@@ -582,14 +573,13 @@ io.on('connection', socket => {
         }
       });
       if (updated.length) {
-        saveMessages();
+        for (const m of updated) await updateMessage(m.id, { deliveredTo: m.deliveredTo });
         updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
       }
     } catch (e) { console.error('delivered:', e); }
   });
 
-  // --- ПРОЧИТАНО ---
-  socket.on('read', ({ userId, messageIds }) => {
+  socket.on('read', async ({ userId, messageIds }) => {
     try {
       if (!userId || !Array.isArray(messageIds)) return;
       const updated = [];
@@ -602,56 +592,48 @@ io.on('connection', socket => {
         }
       });
       if (updated.length) {
-        saveMessages();
+        for (const m of updated) await updateMessage(m.id, { readBy: m.readBy, deliveredTo: m.deliveredTo });
         updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
       }
     } catch (e) { console.error('read:', e); }
   });
 
-  // --- ПЕЧАТАЕТ ---
   socket.on('typing', ({ to, from, fromName }) => {
     try {
       if (!to || !from) return;
       let recipients;
-      if (to === 'public') {
-        recipients = allUserIds().filter(u => u !== from);
-      } else if (typeof to === 'string' && to.startsWith('r_')) {
-        recipients = ((rooms[to] && rooms[to].members) || []).filter(u => u !== from);
-      } else {
-        recipients = [to];
-      }
+      if (to === 'public') recipients = allUserIds().filter(u => u !== from);
+      else if (typeof to === 'string' && to.startsWith('r_')) recipients = ((rooms[to] && rooms[to].members) || []).filter(u => u !== from);
+      else recipients = [to];
       emitToUsers(recipients, 'typing', { to, from, fromName });
     } catch (e) { console.error('typing:', e); }
   });
 
-  // --- СОЗДАТЬ КОМНАТУ ---
-  socket.on('create-room', ({ name, type, description, creator, inviteUsernames }) => {
+  socket.on('create-room', async ({ name, type, description, creator, inviteUsernames }) => {
     try {
       if (!name || !type || !creator) return;
       if (type !== 'group' && type !== 'channel') return;
 
-      const id = 'r_' + crypto.randomBytes(6).toString('hex');
+      const id = 'r_' + require('crypto').randomBytes(6).toString('hex');
       const COLORS = [
         ['#7c5cff','#b846ff'], ['#ff5c8a','#ff8a5c'], ['#5cffb8','#5c9dff'],
         ['#ffb85c','#ff5c5c'], ['#5cffd9','#5c7cff'], ['#b85cff','#ff5cb8']
       ];
       const c = COLORS[Math.floor(Math.random() * COLORS.length)];
-
-      const members = [creator];
-      const admins = [creator];
+      const members = [creator], admins = [creator];
 
       if (Array.isArray(inviteUsernames)) {
-        inviteUsernames.forEach(un => {
+        for (const un of inviteUsernames) {
           const clean = safeUsername(un).toLowerCase();
-          if (!clean) return;
+          if (!clean) continue;
           const found = Object.entries(knownUsers).find(([id2, u]) =>
             id2 !== creator && u.username && u.username.toLowerCase() === clean
           );
           if (found && !members.includes(found[0])) {
             members.push(found[0]);
-            ensureContacts(creator, found[0]);
+            await ensureContacts(creator, found[0]);
           }
-        });
+        }
       }
 
       rooms[id] = {
@@ -659,19 +641,16 @@ io.on('connection', socket => {
         name: name.slice(0, 60),
         description: (description || '').slice(0, 200),
         color: `linear-gradient(135deg,${c[0]},${c[1]})`,
-        createdBy: creator,
-        createdAt: Date.now(),
-        members,
-        admins
+        createdBy: creator, createdAt: Date.now(),
+        members, admins
       };
-      saveRooms();
+      await saveRoom(id);
       broadcastRooms();
       socket.emit('room-created', rooms[id]);
     } catch (e) { console.error('create-room:', e); }
   });
 
-  // --- ПРИГЛАСИТЬ В КОМНАТУ ---
-  socket.on('invite-to-room', ({ roomId, byUserId, usernames }) => {
+  socket.on('invite-to-room', async ({ roomId, byUserId, usernames }) => {
     try {
       const room = rooms[roomId];
       if (!room) return;
@@ -680,20 +659,18 @@ io.on('connection', socket => {
         return;
       }
       const added = [];
-      (usernames || []).forEach(un => {
+      for (const un of (usernames || [])) {
         const clean = safeUsername(un).toLowerCase();
-        if (!clean) return;
-        const found = Object.entries(knownUsers).find(([id, u]) =>
-          u.username && u.username.toLowerCase() === clean
-        );
+        if (!clean) continue;
+        const found = Object.entries(knownUsers).find(([id, u]) => u.username && u.username.toLowerCase() === clean);
         if (found && !room.members.includes(found[0])) {
           room.members.push(found[0]);
           added.push('@' + found[1].username);
-          ensureContacts(byUserId, found[0]);
+          await ensureContacts(byUserId, found[0]);
         }
-      });
+      }
       if (added.length) {
-        saveRooms();
+        await saveRoom(roomId);
         broadcastRooms();
         socket.emit('invited', { names: added });
       } else {
@@ -702,63 +679,70 @@ io.on('connection', socket => {
     } catch (e) { console.error('invite-to-room:', e); }
   });
 
-  // --- ПРИСОЕДИНИТЬСЯ К КОМНАТЕ ---
-  socket.on('join-room', ({ roomId, userId }) => {
+  socket.on('join-room', async ({ roomId, userId }) => {
     try {
       const r = rooms[roomId];
       if (!r || !Array.isArray(r.members) || r.members.includes(userId)) return;
       r.members.push(userId);
-      saveRooms();
+      await saveRoom(roomId);
       broadcastRooms();
     } catch (e) { console.error('join-room:', e); }
   });
 
-  // --- ПОКИНУТЬ КОМНАТУ ---
-  socket.on('leave-room', ({ roomId, userId }) => {
+  socket.on('leave-room', async ({ roomId, userId }) => {
     try {
       const r = rooms[roomId];
       if (!r) return;
       r.members = r.members.filter(x => x !== userId);
       r.admins = r.admins.filter(x => x !== userId);
-      if (r.members.length === 0) delete rooms[roomId];
-      saveRooms();
+      if (r.members.length === 0) { delete rooms[roomId]; await deleteRoom(roomId); }
+      else await saveRoom(roomId);
       broadcastRooms();
     } catch (e) { console.error('leave-room:', e); }
   });
 
-  // --- ОТКЛЮЧЕНИЕ ---
   socket.on('disconnect', (reason) => {
     try {
-      console.log('🔌 Отключение:', socket.id, '|', reason);
       if (socket.userId && online.has(socket.userId)) {
         online.get(socket.userId).delete(socket.id);
         if (online.get(socket.userId).size === 0) online.delete(socket.userId);
         broadcastUserLists();
       }
-    } catch (e) { console.error('disconnect:', e); }
+    } catch (e) {}
   });
 
-  socket.on('error', (err) => {
-    console.error('Socket error:', err);
-  });
+  socket.on('error', (err) => { console.error('Socket error:', err); });
 });
 
 // ============================================================
-// ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ ОШИБОК
+// ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ
 // ============================================================
-process.on('uncaughtException', (err) => {
-  console.error('❌ uncaughtException:', err);
-});
-process.on('unhandledRejection', (err) => {
-  console.error('❌ unhandledRejection:', err);
-});
+process.on('uncaughtException', (err) => { console.error('❌ uncaughtException:', err); });
+process.on('unhandledRejection', (err) => { console.error('❌ unhandledRejection:', err); });
 
 // ============================================================
 // ЗАПУСК
 // ============================================================
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Мессенджер запущен на порту ${PORT}`);
-  console.log(`🌐 Health: /health`);
-  console.log(`🧪 Тест: /test-socketio`);
+
+(async function start() {
+  try {
+    await initDB();
+    await initVapid();
+    await loadData();
+
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n🚀 Мессенджер запущен на порту ${PORT}`);
+      console.log(`📦 Хранилище: MongoDB (включая файлы в base64)`);
+      console.log(`🌐 Health: /health\n`);
+    });
+  } catch (e) {
+    console.error('❌ Критическая ошибка:', e);
+    process.exit(1);
+  }
+})();
+
+process.on('SIGTERM', async () => {
+  try { await mongoClient.close(); } catch (e) {}
+  server.close(() => process.exit(0));
 });
