@@ -1003,4 +1003,432 @@
     updateProfilePreview();
     $('profileModal').style.display = 'flex';
   };
-  $('
+  $('avatarUploadBtn').onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*';
+    input.onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (f.size > 5 * 1024 * 1024) return toast('Максимум 5 МБ');
+      if (!f.type.startsWith('image/')) return toast('Только изображения');
+      const btn = $('avatarUploadBtn');
+      btn.textContent = 'Загрузка...'; btn.disabled = true;
+      try {
+        const data = await uploadFile(f);
+        profileDraft.avatar = data.url;
+        updateProfilePreview();
+        toast('✅ Фото загружено');
+      } catch (err) { toast('Ошибка: ' + err.message); }
+      finally { btn.textContent = '📷 Загрузить фото'; btn.disabled = false; }
+    };
+    input.click();
+  };
+  $('avatarRemoveBtn').onclick = () => { profileDraft.avatar = null; updateProfilePreview(); };
+  $('profileSave').onclick = () => {
+    const newName = $('profileName').value.trim();
+    if (!newName) return toast('Введите имя');
+    if (newName !== me.name) {
+      me.name = newName;
+      me.initials = newName.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0,2) || newName.slice(0,2).toUpperCase();
+      if (!me.avatar) { const colors = PALETTE[Math.floor(Math.random()*PALETTE.length)]; me.color = 'linear-gradient(135deg,'+colors[0]+','+colors[1]+')'; }
+    }
+    me.avatar = profileDraft.avatar;
+    localStorage.setItem('messenger_me', JSON.stringify(me));
+    socket.emit('update-profile', { userId: me.userId, name: me.name, color: me.color, initials: me.initials, avatar: me.avatar || null });
+    renderMeAvatar();
+    $('profileModal').style.display = 'none';
+    toast('✅ Профиль обновлён');
+  };
+  $('profileCancel').onclick = () => { profileDraft = null; $('profileModal').style.display = 'none'; };
+  $('profileLogout').onclick = () => {
+    if (!confirm('Выйти из аккаунта?')) return;
+    localStorage.removeItem('messenger_me');
+    location.reload();
+  };
+
+  // Поиск пользователя
+  $('searchUserBtn').onclick = () => {
+    $('searchUserInput').value = '';
+    $('searchResults').innerHTML = '<div class="empty-search">Начните вводить @username</div>';
+    $('searchModal').style.display = 'flex';
+  };
+  $('searchCancel').onclick = () => $('searchModal').style.display = 'none';
+  let searchDebounce = null;
+  $('searchUserInput').addEventListener('input', e => {
+    e.target.value = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
+    clearTimeout(searchDebounce);
+    const q = e.target.value.trim();
+    if (!q) { $('searchResults').innerHTML = '<div class="empty-search">Начните вводить @username</div>'; return; }
+    searchDebounce = setTimeout(() => { socket.emit('search-user', { query: q, byUserId: me.userId }); }, 250);
+  });
+  function renderSearchResults(query, results) {
+    const box = $('searchResults');
+    if (!results || !results.length) { box.innerHTML = '<div class="empty-search">По запросу «@'+escapeHtml(query)+'» никого не найдено</div>'; return; }
+    box.innerHTML = '';
+    results.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      item.innerHTML = '<div class="avatar" style="'+avatarStyle(r)+'">'+avatarHtml(r)+'</div><div class="info"><div class="name">'+escapeHtml(r.name)+'</div><div class="username">@'+escapeHtml(r.username)+(r.online ? ' · в сети' : '')+'</div></div><button class="add-btn">Написать</button>';
+      const handle = () => { socket.emit('add-contact', { userId: me.userId, contactId: r.userId }); $('searchModal').style.display = 'none'; };
+      item.querySelector('.add-btn').onclick = e => { e.stopPropagation(); handle(); };
+      item.onclick = handle;
+      box.appendChild(item);
+    });
+  }
+
+  // Поиск по сообщениям
+  $('msgSearchBtn').onclick = () => {
+    $('msgSearchInput').value = '';
+    $('msgSearchResults').innerHTML = '<div class="empty-search">Введите минимум 2 символа</div>';
+    $('msgSearchModal').style.display = 'flex';
+    setTimeout(() => $('msgSearchInput').focus(), 100);
+  };
+  $('msgSearchCancel').onclick = () => $('msgSearchModal').style.display = 'none';
+  let msgSearchDebounce = null;
+  $('msgSearchInput').addEventListener('input', e => {
+    clearTimeout(msgSearchDebounce);
+    const q = e.target.value.trim();
+    if (q.length < 2) { $('msgSearchResults').innerHTML = '<div class="empty-search">Введите минимум 2 символа</div>'; return; }
+    msgSearchDebounce = setTimeout(() => { socket.emit('search-messages', { userId: me.userId, query: q }); }, 300);
+  });
+  function renderMsgSearchResults(query, results) {
+    const box = $('msgSearchResults');
+    if (!results || !results.length) { box.innerHTML = '<div class="empty-search">Ничего не найдено</div>'; return; }
+    box.innerHTML = '';
+    const q = query.toLowerCase();
+    results.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'search-messages-result';
+      const chatName = m.to === 'public' ? 'Общий чат'
+        : m.to.startsWith('r_') ? (rooms.find(r => r.id === m.to)?.name || 'Группа')
+        : 'Личный чат';
+      const date = new Date(m.timestamp).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      let text = escapeHtml(m.text || '');
+      const idx = text.toLowerCase().indexOf(q);
+      if (idx >= 0) text = text.slice(0, idx) + '<mark>' + text.slice(idx, idx + q.length) + '</mark>' + text.slice(idx + q.length);
+      item.innerHTML = '<div class="smeta"><span><b>'+escapeHtml(m.fromName || 'Аноним')+'</b> · '+escapeHtml(chatName)+'</span><span>'+date+'</span></div><div class="stext">'+text+'</div>';
+      item.onclick = () => {
+        $('msgSearchModal').style.display = 'none';
+        const key = chatKeyFor(m);
+        openChat(key);
+      };
+      box.appendChild(item);
+    });
+  }
+
+  // Reply
+  function renderReplyPreview() {
+    if (!replyTo) { replyPreviewEl.style.display = 'none'; replyPreviewEl.innerHTML = ''; return; }
+    replyPreviewEl.style.display = 'block';
+    replyPreviewEl.innerHTML = '<div class="reply-preview-inner"><div class="reply-preview-info"><div class="reply-preview-author">'+escapeHtml(replyTo.fromName)+'</div><div class="reply-preview-text">'+escapeHtml(replyTo.text || '📎 файл')+'</div></div><button class="reply-preview-close">×</button></div>';
+    replyPreviewEl.querySelector('.reply-preview-close').onclick = () => { replyTo = null; renderReplyPreview(); };
+  }
+  function setReplyTo(msg) {
+    replyTo = { id: msg.id, from: msg.from, fromName: msg.fromName, text: msg.deleted ? 'удалено' : (msg.text || (msg.file ? '📎 ' + msg.file.name : '')), file: msg.file ? { name: msg.file.name } : null };
+    renderReplyPreview();
+    inputEl.focus();
+  }
+
+  // === Контекстное меню и реакции ===
+  let activeContext = null;
+  function closeContext() {
+    if (activeContext) {
+      activeContext.remove();
+      activeContext = null;
+    }
+  }
+
+  messagesEl.addEventListener('contextmenu', e => {
+    const wrap = e.target.closest('.msg-wrap');
+    if (!wrap) return;
+    e.preventDefault();
+    openMessageActions(wrap.dataset.msgId, e.clientX, e.clientY);
+  });
+
+  // Долгий тап на мобильных
+  let longPressTimer = null;
+  messagesEl.addEventListener('touchstart', e => {
+    const wrap = e.target.closest('.msg-wrap');
+    if (!wrap) return;
+    longPressTimer = setTimeout(() => {
+      const rect = wrap.getBoundingClientRect();
+      openMessageActions(wrap.dataset.msgId, rect.left + rect.width/2, rect.top);
+    }, 500);
+  }, { passive: true });
+  ['touchend', 'touchmove', 'touchcancel'].forEach(ev => {
+    messagesEl.addEventListener(ev, () => { clearTimeout(longPressTimer); }, { passive: true });
+  });
+
+  function openMessageActions(msgId, x, y) {
+    closeContext();
+    const m = allMessages.find(mm => mm.id === msgId);
+    if (!m || m.deleted) return;
+    const isMe = m.from === me.userId;
+
+    // Панель реакций
+    const bar = document.createElement('div');
+    bar.className = 'reactions-bar';
+    EMOJIS.forEach(emoji => {
+      const b = document.createElement('button');
+      b.textContent = emoji;
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        socket.emit('react-message', { messageId: msgId, userId: me.userId, emoji });
+        bar.remove();
+      };
+      bar.appendChild(b);
+    });
+    document.body.appendChild(bar);
+    const bw = bar.offsetWidth, bh = bar.offsetHeight;
+    let bx = Math.max(10, Math.min(x - bw/2, window.innerWidth - bw - 10));
+    let by = y - bh - 12;
+    if (by < 10) by = y + 20;
+    bar.style.left = bx + 'px';
+    bar.style.top = by + 'px';
+
+    // Контекстное меню
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    const items = [];
+    items.push({ icon: '↩️', text: 'Ответить', action: () => setReplyTo(m) });
+    if (isMe) {
+      if (m.text && !m.file) {
+        items.push({ icon: '✏️', text: 'Изменить', action: () => openEditModal(m) });
+      } else if (m.text && m.file) {
+        items.push({ icon: '✏️', text: 'Изменить текст', action: () => openEditModal(m) });
+      }
+      items.push({ icon: '🗑', text: 'Удалить', danger: true, action: () => {
+        if (confirm('Удалить это сообщение?')) {
+          socket.emit('delete-message', { messageId: msgId, userId: me.userId });
+        }
+      }});
+    }
+    items.forEach(it => {
+      const el = document.createElement('div');
+      el.className = 'context-menu-item' + (it.danger ? ' danger' : '');
+      el.innerHTML = '<span style="font-size:16px">'+it.icon+'</span> ' + it.text;
+      el.onclick = (ev) => { ev.stopPropagation(); it.action(); menu.remove(); bar.remove(); };
+      menu.appendChild(el);
+    });
+    document.body.appendChild(menu);
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let mx = Math.max(10, Math.min(x, window.innerWidth - mw - 10));
+    let my = y;
+    if (my + mh > window.innerHeight - 10) my = window.innerHeight - mh - 10;
+    menu.style.left = mx + 'px';
+    menu.style.top = my + 'px';
+
+    activeContext = {
+      remove: () => { menu.remove(); bar.remove(); },
+      _menu: menu, _bar: bar
+    };
+  }
+
+  document.addEventListener('click', (e) => {
+    if (activeContext && !e.target.closest('.context-menu') && !e.target.closest('.reactions-bar')) {
+      activeContext.remove();
+      activeContext = null;
+    }
+  });
+  document.addEventListener('scroll', () => {
+    if (activeContext) { activeContext.remove(); activeContext = null; }
+  }, true);
+
+  // Edit modal
+  function openEditModal(m) {
+    const overlay = document.createElement('div');
+    overlay.className = 'edit-modal-overlay';
+    overlay.innerHTML = '<div class="edit-modal"><h3>Редактировать сообщение</h3><textarea id="editTextarea"></textarea><div class="edit-modal-actions"><button class="cancel-btn">Отмена</button><button class="save-btn">Сохранить</button></div></div>';
+    document.body.appendChild(overlay);
+    const ta = overlay.querySelector('#editTextarea');
+    ta.value = m.text || '';
+    ta.focus();
+    overlay.querySelector('.cancel-btn').onclick = () => overlay.remove();
+    overlay.querySelector('.save-btn').onclick = () => {
+      const v = ta.value.trim();
+      if (!v) return;
+      socket.emit('edit-message', { messageId: m.id, userId: me.userId, newText: v });
+      overlay.remove();
+    };
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  // Отправка
+  async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error('Ошибка загрузки');
+    return await res.json();
+  }
+  async function sendMessage() {
+    const text = inputEl.value.trim();
+    if (!text && !pendingFile) return;
+    if (!socket.connected) return toast('⚠️ Нет соединения');
+    if (inputEl.disabled) return;
+    let fileData = null;
+    if (pendingFile) {
+      sendBtn.classList.add('uploading'); sendBtn.disabled = true;
+      try { fileData = await uploadFile(pendingFile); }
+      catch (e) { toast('Ошибка: ' + e.message); sendBtn.classList.remove('uploading'); sendBtn.disabled = false; updateInputState(); return; }
+    }
+    const ts = Date.now();
+    const msg = {
+      id: 'm_' + ts + '_' + Math.random().toString(36).slice(2, 8),
+      from: me.userId, fromName: me.name, to: currentRoomId,
+      text, file: fileData,
+      replyTo: replyTo ? { id: replyTo.id, from: replyTo.from, fromName: replyTo.fromName, text: replyTo.text } : null,
+      timestamp: ts
+    };
+    addMessage(Object.assign({}, msg, {
+      time: fmtTime(ts), deliveredTo: [], readBy: [],
+      reactions: {}, edited: false, deleted: false
+    }));
+    socket.emit('message', msg);
+    inputEl.value = ''; inputEl.style.height = 'auto';
+    pendingFile = null; renderPendingFile();
+    replyTo = null; renderReplyPreview();
+    sendBtn.classList.remove('uploading'); updateInputState(); inputEl.focus();
+  }
+
+  function renderPendingFile() {
+    if (!pendingFile) { pendingFileEl.style.display = 'none'; pendingFileEl.innerHTML = ''; return; }
+    pendingFileEl.style.display = 'block';
+    const isImage = pendingFile.type.startsWith('image/');
+    const preview = isImage ? '<img class="pending-preview-img" src="'+URL.createObjectURL(pendingFile)+'" alt="">' : '<div class="file-icon" style="font-size:28px">📎</div>';
+    pendingFileEl.innerHTML = '<div class="pending-file-inner">'+preview+'<div class="pending-file-info"><div class="name">'+escapeHtml(pendingFile.name)+'</div><div class="size">'+formatSize(pendingFile.size)+'</div></div><button class="pending-remove">×</button></div>';
+    pendingFileEl.querySelector('.pending-remove').onclick = () => { pendingFile = null; renderPendingFile(); };
+  }
+  function pickFile(file) {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) return toast('Файл слишком большой (макс. 10 МБ)');
+    pendingFile = file; renderPendingFile();
+  }
+
+  $('attachBtn').onclick = () => fileInput.click();
+  fileInput.onchange = e => { pickFile(e.target.files[0]); fileInput.value = ''; };
+  sendBtn.onclick = sendMessage;
+  inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+    if (!socket.connected || !me) return;
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => { socket.emit('typing', { to: currentRoomId, from: me.userId, fromName: me.name }); }, 200);
+  });
+
+  // Создание
+  let createType = 'group';
+  $('createRoomBtn').onclick = () => {
+    $('roomName').value = ''; $('roomDesc').value = ''; $('roomInvite').value = '';
+    createType = 'group';
+    document.querySelectorAll('.type-opt').forEach(o => o.classList.toggle('selected', o.dataset.type === 'group'));
+    $('createModal').style.display = 'flex';
+  };
+  document.querySelectorAll('.type-opt').forEach(opt => {
+    opt.onclick = () => {
+      createType = opt.dataset.type;
+      document.querySelectorAll('.type-opt').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+    };
+  });
+  $('createCancel').onclick = () => $('createModal').style.display = 'none';
+  $('createSubmit').onclick = () => {
+    const name = $('roomName').value.trim();
+    if (!name) return toast('Введите название');
+    const invites = $('roomInvite').value.split(',').map(s => s.trim()).filter(Boolean);
+    socket.emit('create-room', { name, type: createType, description: $('roomDesc').value.trim(), creator: me.userId, inviteUsernames: invites });
+    $('createModal').style.display = 'none';
+  };
+
+  $('inviteCancel').onclick = () => $('inviteModal').style.display = 'none';
+  $('inviteSubmit').onclick = () => {
+    const usernames = $('inviteInput').value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!usernames.length) return toast('Введите @username');
+    socket.emit('invite-to-room', { roomId: currentRoomId, byUserId: me.userId, usernames });
+    $('inviteModal').style.display = 'none';
+  };
+
+  $('filterInput').addEventListener('input', e => { currentFilter = e.target.value; renderChats(); });
+
+  // Push
+  async function initPushState() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) { $('notifyBtn').style.display = 'none'; return; }
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      const sub = await reg.pushManager.getSubscription();
+      pushEnabled = !!sub;
+      $('notifyBtn').classList.toggle('on', pushEnabled);
+      $('notifyBtn').textContent = pushEnabled ? '🔔' : '🔕';
+    } catch (e) {}
+  }
+  $('notifyBtn').onclick = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return toast('Push не поддерживается');
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch('/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, endpoint: sub.endpoint }) });
+        await sub.unsubscribe();
+        pushEnabled = false;
+        $('notifyBtn').classList.remove('on'); $('notifyBtn').textContent = '🔕';
+        return toast('🔕 Уведомления отключены');
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return toast('Уведомления запрещены');
+      const { key } = await fetch('/vapid-public-key').then(r => r.json());
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
+      await fetch('/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, subscription: sub }) });
+      pushEnabled = true;
+      $('notifyBtn').classList.add('on'); $('notifyBtn').textContent = '🔔';
+      toast('✅ Уведомления включены');
+    } catch (e) { toast('Ошибка: ' + e.message); }
+  };
+
+  messagesEl.addEventListener('click', e => {
+    const img = e.target.closest('[data-img]');
+    if (!img) return;
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = '<img src="'+img.dataset.img+'" alt="">';
+    lb.onclick = () => lb.remove();
+    document.body.appendChild(lb);
+  });
+
+  $('backBtn').onclick = () => $('sidebar').classList.remove('hidden');
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { markCurrentAsRead(); document.title = 'Мессенджер'; } });
+
+  function isMobile() { return window.innerWidth <= 720; }
+  function syncAppHeight() {
+    if (!isMobile()) { const app = $('app'); if (app) app.style.height = ''; return; }
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    const app = $('app'); if (app) app.style.height = h + 'px';
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncAppHeight);
+    window.visualViewport.addEventListener('scroll', syncAppHeight);
+  }
+  window.addEventListener('resize', syncAppHeight);
+  window.addEventListener('orientationchange', () => setTimeout(syncAppHeight, 300));
+  inputEl.addEventListener('focus', () => { setTimeout(() => { syncAppHeight(); messagesEl.scrollTop = messagesEl.scrollHeight; }, 300); });
+  inputEl.addEventListener('blur', () => setTimeout(syncAppHeight, 100));
+  syncAppHeight();
+
+  // Старт
+  registerSocketListeners();
+  if (savedMe && savedMe.name && savedMe.username) {
+    me = savedMe;
+    renderMeAvatar();
+    $('app').style.display = 'flex';
+    initPushState();
+    hideBoot();
+    if (socket.connected) sendJoin();
+  } else {
+    hideBoot();
+    $('nameModal').style.display = 'flex';
+    setTimeout(() => $('nameInput').focus(), 100);
+  }
+})();
+</script>
+</body>
+</html>
