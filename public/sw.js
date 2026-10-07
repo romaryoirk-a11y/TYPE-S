@@ -1,4 +1,4 @@
-const CACHE_NAME = 'messenger-v4';
+const CACHE_NAME = 'messenger-v5';
 const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', e => {
@@ -17,7 +17,6 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Не кэшируем socket.io, upload и API
   if (url.pathname.startsWith('/socket.io') ||
       url.pathname.startsWith('/upload') ||
       url.pathname.startsWith('/health') ||
@@ -27,7 +26,6 @@ self.addEventListener('fetch', e => {
       url.hostname !== self.location.hostname) {
     return;
   }
-  // HTML и манифест — сеть в приоритете
   if (url.pathname === '/' || url.pathname.endsWith('.html') || url.pathname.endsWith('.json')) {
     e.respondWith(
       fetch(e.request).then(r => {
@@ -38,10 +36,7 @@ self.addEventListener('fetch', e => {
     );
     return;
   }
-  // Остальное — кэш в приоритете
-  e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
-  );
+  e.respondWith(caches.match(e.request).then(cached => cached || fetch(e.request)));
 });
 
 self.addEventListener('push', e => {
