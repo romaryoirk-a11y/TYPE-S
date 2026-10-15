@@ -1,20 +1,88 @@
 {
-  "name": "Мессенджер",
-  "short_name": "Мессенджер",
-  "description": "Простой мессенджер с real-time общением",
+  "id": "/?source=pwa",
+  "name": "Pulse",
+  "short_name": "Pulse",
+  "description": "Мессенджер в ритме общения — чаты, группы, каналы, файлы и уведомления.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
-  "background_color": "#05060d",
-  "theme_color": "#7c5cff",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#3390ec",
   "lang": "ru",
+  "dir": "ltr",
+  "categories": ["social", "communication", "productivity"],
   "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
     {
       "src": "/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
-  ]
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot-mobile.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Мобильная версия Pulse"
+    },
+    {
+      "src": "/screenshot-desktop.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Десктопная версия Pulse"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Сохранённые",
+      "short_name": "Избранное",
+      "url": "/?open=saved",
+      "description": "Открыть сохранённые сообщения",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Найти пользователя",
+      "short_name": "Поиск",
+      "url": "/?open=search",
+      "description": "Поиск по @username",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Новая группа",
+      "short_name": "Группа",
+      "url": "/?open=newgroup",
+      "description": "Создать новую группу или канал",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
 }
