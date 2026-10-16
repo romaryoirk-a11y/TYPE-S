@@ -32,11 +32,17 @@ const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // ---------- Безопасность: секреты и сессии ----------
-// SESSION_SECRET обязателен в продакшене (иначе токены нельзя верифицировать криптографически)
-const SESSION_SECRET = process.env.SESSION_SECRET || '';
-if (!SESSION_SECRET && process.env.NODE_ENV === 'production') {
-  console.error('[fatal] SESSION_SECRET не задан — требуется для подписи сессионных токенов');
-  process.exit(1);
+// SESSION_SECRET используется для HMAC-подписи сессионных токенов.
+// Если переменная окружения не задана — генерируем временный секрет (токены
+// станут недействительны после перезапуска процесса, но сервер не упадёт).
+let SESSION_SECRET = process.env.SESSION_SECRET || '';
+if (!SESSION_SECRET) {
+  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[warn] SESSION_SECRET не задан — сгенерирован временный. ' +
+      'Все пользователи будут разлогинены при каждом рестарте сервиса. ' +
+      'Задайте SESSION_SECRET в переменных окружения (на Render: Environment).');
+  }
 }
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней
 const TOKEN_GRACE_MS = 60 * 1000;                // «продление» токена при активности (окно скользящего TTL)
@@ -310,6 +316,15 @@ app.get('/f/:id', authHttp, async (req, res) => {
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true, time: Date.now(), db: 'mongodb' }));
+
+// Пока MongoDB не подключена (например, идёт переподключение в фоне),
+// все обращения к БД должны возвращать 503, а не падать с TypeError.
+app.use((req, res, next) => {
+  if (!col.users) {
+    return res.status(503).json({ error: 'Сервис временно недоступен: подключение к базе данных' });
+  }
+  next();
+});
 
 app.get('/stats', async (_req, res) => {
   try {
@@ -1298,9 +1313,27 @@ process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e 
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e && e.stack || e));
 
 // ---------- Старт ----------
-startMongo()
-  .then(() => server.listen(PORT, () => console.log('Pulse listening on ' + PORT)))
-  .catch(e => { console.error('[mongo] fatal:', e); process.exit(1); });
+// Стратегия для Render: HTTP-порт должен быть занят сразу после запуска,
+// иначе деплой не пройдёт health-check. Поэтому сервер слушает немедленно,
+// а подключение к MongoDB повторяется в фоне (эндпоинты без БД вернут 503).
+const MONGO_RETRY_MS = 20 * 1000;
+
+async function connectMongoWithRetry() {
+  for (;;) {
+    try {
+      await startMongo();
+      console.log('[mongo] подключения установлены, сервис полностью готов');
+      return;
+    } catch (e) {
+      console.error('[mongo] ошибка подключения:', e.message || e);
+      console.error(`[mongo] повторная попытка через ${MONGO_RETRY_MS / 1000} с...`);
+      await new Promise(r => setTimeout(r, MONGO_RETRY_MS));
+    }
+  }
+}
+
+server.listen(PORT, () => console.log('Pulse listening on ' + PORT));
+connectMongoWithRetry();
 
 process.on('SIGINT', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
 process.on('SIGTERM', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
