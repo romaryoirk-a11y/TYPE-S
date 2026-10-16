@@ -182,6 +182,10 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 
 .chat-item { display: flex; gap: 12px; padding: 9px 13px; cursor: pointer; align-items: center; position: relative; transition: background .1s; }
 .chat-item:hover { background: var(--sidebar-hover); }
+.chat-del { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(0,0,0,.25); color: #fff; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0; z-index: 2; }
+.chat-del .icon { width: 15px; height: 15px; stroke: currentColor; }
+.chat-item:hover .chat-del { display: flex; }
+.chat-del:hover { background: var(--danger, #e53935); }
 .chat-item.active { background: var(--sidebar-active); }
 .chat-item.active .chat-name, .chat-item.active .chat-time, .chat-item.active .chat-preview, .chat-item.active .chat-preview .from { color: #fff; }
 .chat-item.active .chat-icons { color: rgba(255,255,255,.9); }
@@ -619,7 +623,15 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
         <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
         <span id="upContactBtnText">Добавить в контакты</span>
       </button>
-      <button class="user-profile-btn danger" id="upCloseBtn">Закрыть</button>
+      <button class="user-profile-btn danger" id="upBlockBtn">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        <span id="upBlockBtnText">Заблокировать</span>
+      </button>
+      <button class="user-profile-btn danger" id="upDeleteChatBtn" style="display:none">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+        <span id="upDeleteChatBtnText">Удалить чат</span>
+      </button>
+      <button class="user-profile-btn secondary" id="upCloseBtn">Закрыть</button>
     </div>
   </div>
 </div>
@@ -948,7 +960,14 @@ var I18N = {
     muted_off:'Уведомления выключены',muted_on:'Уведомления включены',
     you:'Вы',saved_msg:'Ваше личное пространство',
     add_contact:'Добавить в контакты',remove_contact:'Удалить из контактов',
-    contact_added:'Контакт добавлен'
+    contact_added:'Контакт добавлен',
+    delete_chat:'Удалить чат',delete_chat_confirm:'Удалить чат? История сообщений исчезнет только у вас.',
+    chat_deleted:'Чат удалён',
+    block:'Заблокировать',unblock:'Разблокировать',
+    block_confirm:'Заблокировать пользователя? Он не сможет писать вам и не будет вас видеть.',
+    blocked_label:'Заблокирован',
+    user_blocked_by_you:'Пользователь заблокирован. Разблокируйте, чтобы писать.',
+    write_message:'Написать сообщение'
   },
   en: {
     public_chat:'Public chat',channels:'Channels',groups:'Groups',available:'Available',personal:'Personal',
@@ -973,7 +992,14 @@ var I18N = {
     muted_off:'Notifications off',muted_on:'Notifications on',
     you:'You',saved_msg:'Your personal space',
     add_contact:'Add to contacts',remove_contact:'Remove from contacts',
-    contact_added:'Contact added'
+    contact_added:'Contact added',
+    delete_chat:'Delete chat',delete_chat_confirm:'Delete chat? Message history will disappear only for you.',
+    chat_deleted:'Chat deleted',
+    block:'Block',unblock:'Unblock',
+    block_confirm:'Block this user? They won\'t be able to message you and won\'t see you.',
+    blocked_label:'Blocked',
+    user_blocked_by_you:'User is blocked. Unblock to write.',
+    write_message:'Write message'
   }
 };
 var LANG = 'ru';
@@ -1013,7 +1039,7 @@ var socket = null;
 var me = null, sessionToken = null;
 var allMsgs = [], users = [], rooms = [];
 var currentRoom = 'public';
-var unread = {}, mutedChats = [];
+var unread = {}, mutedChats = [], blockedList = [];
 var pendingFile = null, replyTo = null;
 var typingUsers = {}, typingTimeout = null;
 var connected = false, pushEnabled = false, listenersReg = false;
@@ -1148,6 +1174,16 @@ function openUserProfile(userId) {
   else { st.textContent = t('offline'); st.className = 'user-profile-status'; }
   var isContact = users.some(function(x){ return x.userId === userId; });
   $('upContactBtnText').textContent = isContact ? t('remove_contact') : t('add_contact');
+
+  var isBlocked = blockedList.indexOf(userId) >= 0;
+  var hasHistory = allMsgs.some(function(m){
+    return (m.from === me.userId && m.to === userId) || (m.from === userId && m.to === me.userId);
+  });
+  $('upBlockBtnText').textContent = isBlocked ? t('unblock') : t('block');
+  $('upDeleteChatBtn').style.display = hasHistory ? 'flex' : 'none';
+  $('upMessageBtn').disabled = isBlocked;
+  $('upMessageBtn').style.opacity = isBlocked ? '.5' : '';
+
   $('userProfileModal').style.display = 'flex';
 }
 
@@ -1201,6 +1237,24 @@ function initUI() {
   $('regPassword').addEventListener('keydown', function(e){ if(e.key==='Enter') $('registerBtn').click(); });
 
   $('upCloseBtn').onclick = closeUserProfile;
+  $('upBlockBtn').onclick = function() {
+    if (!viewingUserId) return;
+    var isBlocked = blockedList.indexOf(viewingUserId) >= 0;
+    if (isBlocked) {
+      socket.emit('unblock-user', { targetUserId: viewingUserId });
+      closeUserProfile();
+    } else {
+      if (!confirm(t('block_confirm'))) return;
+      socket.emit('block-user', { targetUserId: viewingUserId });
+      closeUserProfile();
+    }
+  };
+  $('upDeleteChatBtn').onclick = function() {
+    if (!viewingUserId) return;
+    if (!confirm(t('delete_chat_confirm'))) return;
+    socket.emit('delete-chat', { chatId: viewingUserId });
+    closeUserProfile();
+  };
   $('upMessageBtn').onclick = function() {
     var uid = viewingUserId;
     closeUserProfile();
@@ -1532,6 +1586,7 @@ function registerSocket() {
       applyTheme(); applyLang(); updateThemePicker();
     }
     if (Array.isArray(data.user.mutedChats)) mutedChats = data.user.mutedChats;
+    blockedList = Array.isArray(data.user.blocked) ? data.user.blocked : [];
     $('authModal').style.display = 'none';
     $('app').style.display = 'flex';
     hideBoot();
@@ -1573,6 +1628,31 @@ function registerSocket() {
   socket.on('error-msg', function(d){ toast(d.text); });
   socket.on('room-created', function(r){ toast(r.name); openChat(r.id); });
   socket.on('invited', function(d){ toast(d.names.join(', ')); });
+
+  socket.on('chat-deleted', function(d){
+    var chatId = d.chatId;
+    allMsgs = allMsgs.filter(function(m){ return chatKey(m) !== chatId; });
+    var searchResults = $('searchResults');
+    if (searchResults) searchResults.innerHTML = '';
+
+    // удаляем из интерфейса чат, который был удалён
+    delete unread[chatId];
+    if (typeof chatId === 'string' && chatId.indexOf('r_') === 0) {
+      rooms = rooms.filter(function(r){ return r.id !== chatId; });
+    } else if (chatId !== 'public' && chatId !== 'saved') {
+      users = users.filter(function(u){ return u.userId !== chatId; });
+    }
+    if (currentRoom === chatId) openChat('public');
+    renderChats();
+    toast(t('chat_deleted'));
+  });
+
+  socket.on('blocked-updated', function(d){
+    blockedList = d.blocked || [];
+    if (me) { me.blocked = blockedList; saveMe(); }
+    renderChats(); updateHeader();
+  });
+
   socket.on('contact-added', function(d){ setTimeout(function(){ openChat(d.userId); }, 200); });
   socket.on('contact-removed', function(d){ if (currentRoom===d.userId) openChat('public'); });
   socket.on('search-result', function(d){ renderSearchUsers(d.results); });
@@ -1877,8 +1957,21 @@ function renderChats() {
     }
     bot.appendChild(pv);
     info.appendChild(bot);
-    item.appendChild(info);
 
+    // кнопка «Удалить чат» при наведении (кроме общего чата и сохранённых)
+    if (opts.id !== 'public' && opts.id !== 'saved') {
+      var del = document.createElement('button');
+      del.className = 'chat-del';
+      del.title = t('delete_chat');
+      del.innerHTML = ICONS.trash;
+      del.onclick = function(ev){
+        ev.stopPropagation();
+        deleteChat(opts.id, opts.name);
+      };
+      item.appendChild(del);
+    }
+
+    item.appendChild(info);
     item.onclick = function(){ openChat(opts.id); };
     el.appendChild(item);
     return item;
@@ -1920,6 +2013,29 @@ function renderChats() {
     }));
     addRow({ id:u.userId, name:u.name, initials:u.initials, avatar:u.avatar, color:u.color, online:u.online, showStatus:true, lastMsg:lm });
   });
+
+  // заблокированные пользователи — отдельная секция (только у себя)
+  var blockedUsers = [];
+  rooms.forEach(function(r){
+    r.members.forEach(function(mid){
+      if (mid !== me.userId && blockedList.indexOf(mid) >= 0 &&
+          !blockedUsers.some(function(x){ return x.userId === mid; })) {
+        var msg = allMsgs.find(function(m){ return m.from === mid && m.to === r.id; });
+        blockedUsers.push({ userId: mid, name: (msg && msg.fromName) || 'Пользователь',
+          initials: ((msg && msg.fromName) || '?').slice(0,2).toUpperCase(), color:'#8b8b8b', avatar:null, online:false });
+      }
+    });
+  });
+  if (blockedList.length) {
+    var bh = document.createElement('div');
+    bh.className = 'section-header';
+    bh.textContent = t('blocked_label');
+    el.appendChild(bh);
+    blockedUsers.forEach(function(u){
+      if (!match(u.name)) return;
+      addRow({ id:u.userId, name:u.name, initials:u.initials, avatar:u.avatar, color:u.color, online:false, showStatus:true, lastMsg:null });
+    });
+  }
 
   if (!el.children.length) {
     var e2 = document.createElement('div');
@@ -1980,23 +2096,40 @@ function updateHeader() {
     });
   } else {
     var u = userById(currentRoom);
+    var isDirectBlocked = blockedList.indexOf(currentRoom) >= 0;
     if (!u) {
-      var anyMsg = allMsgs.find(function(m){ return m.from === currentRoom || m.to === currentRoom; });
-      nm.textContent = anyMsg && anyMsg.from === currentRoom ? (anyMsg.fromName || '—') : '—';
-      stt.textContent = '';
-      av.textContent = '?';
-      return;
+      if (isDirectBlocked) {
+        var bmsg = allMsgs.find(function(m){ return m.from === currentRoom; });
+        nm.textContent = (bmsg && bmsg.fromName) || 'Пользователь';
+        stt.textContent = t('blocked_label');
+        av.style.background = '#8b8b8b';
+        av.innerHTML = ICONS.ban;
+        av.style.cursor = 'pointer';
+        av.onclick = function(){ openUserProfile(currentRoom); };
+        addAct(ICONS.user, 'Профиль', function(){ openUserProfile(currentRoom); });
+      } else {
+        var anyMsg = allMsgs.find(function(m){ return m.from === currentRoom || m.to === currentRoom; });
+        nm.textContent = anyMsg && anyMsg.from === currentRoom ? (anyMsg.fromName || '—') : '—';
+        stt.textContent = '';
+        av.textContent = '?';
+      }
+    } else {
+      nm.textContent = u.name;
+      stt.textContent = u.online ? t('online') : t('offline');
+      if (u.avatar) { av.style.background = '#000'; av.innerHTML = '<img src="' + u.avatar + '">'; }
+      else { av.style.background = u.color; av.textContent = u.initials || '?'; }
+      av.style.cursor = 'pointer';
+      av.onclick = function(){ openUserProfile(u.userId); };
+      addAct(mutedChats.indexOf(u.userId) >= 0 ? ICONS.bellOff : ICONS.bell, 'Mute', function(){ toggleMute(u.userId); });
+      addAct(ICONS.user, 'Профиль', function(){ openUserProfile(u.userId); });
     }
-    nm.textContent = u.name;
-    stt.textContent = u.online ? t('online') : t('offline');
-    if (u.avatar) { av.style.background = '#000'; av.innerHTML = '<img src="' + u.avatar + '">'; }
-    else { av.style.background = u.color; av.textContent = u.initials || '?'; }
-    av.style.cursor = 'pointer';
-    av.onclick = function(){ openUserProfile(u.userId); };
-    addAct(mutedChats.indexOf(u.userId) >= 0 ? ICONS.bellOff : ICONS.bell, 'Mute', function(){ toggleMute(u.userId); });
-    addAct(ICONS.user, 'Профиль', function(){ openUserProfile(u.userId); });
   }
   updatePinnedBar();
+}
+
+function deleteChat(chatId) {
+  if (!confirm(t('delete_chat_confirm'))) return;
+  socket.emit('delete-chat', { chatId: chatId });
 }
 
 function onlineCountText() {
@@ -2087,18 +2220,20 @@ function updatePinnedBar() {
 
 function updateInputState() {
   var ta = $('messageInput'), send = $('sendBtn'), att = $('attachBtn');
-  var blocked = false;
+  var blocked = false, ph = 'Напишите сообщение...';
   if (typeof currentRoom === 'string' && currentRoom.indexOf('r_') === 0) {
     var r = roomById(currentRoom);
     if (r) {
       var role = r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member');
       if (r.type === 'channel' && role !== 'owner' && role !== 'admin') blocked = true;
     }
+  } else if (typeof currentRoom === 'string' && currentRoom !== 'public' && currentRoom !== 'saved') {
+    if (blockedList.indexOf(currentRoom) >= 0) { blocked = true; ph = t('user_blocked_by_you'); }
   }
   ta.disabled = blocked;
   att.disabled = blocked;
   send.disabled = blocked;
-  ta.placeholder = blocked ? t('only_admins') : 'Напишите сообщение...';
+  ta.placeholder = ph;
 }
 
 function openChat(id) {
@@ -2113,8 +2248,10 @@ function openChat(id) {
   updateInputState();
   markRead();
   if (id !== 'public' && id !== 'saved' && !(typeof id === 'string' && id.indexOf('r_') === 0)) {
-    var exists = users.some(function(u){ return u.userId === id; });
-    if (!exists && id !== me.userId) socket.emit('add-contact', { contactId: id });
+    if (blockedList.indexOf(id) < 0) {
+      var exists = users.some(function(u){ return u.userId === id; });
+      if (!exists && id !== me.userId) socket.emit('add-contact', { contactId: id });
+    }
   }
 }
 
