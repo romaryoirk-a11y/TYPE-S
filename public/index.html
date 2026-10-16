@@ -3,10 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#ffffff">
+<meta name="theme-color" content="#3390ec">
+<meta name="description" content="Pulse — мессенджер в ритме общения.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Pulse">
+<meta name="application-name" content="Pulse">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/icon.svg">
-<title>Messenger</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-192.png">
+<title>Pulse</title>
 <script>
 window.addEventListener('error', function(e){
   console.error('[err]', e.message);
@@ -45,9 +55,6 @@ function loadSocketIO() {
 }
 </script>
 <style>
-/* ============================================================
-   СВЕТЛАЯ ТЕМА — Telegram Web A palette
-   ============================================================ */
 :root, [data-theme="light"] {
   --bg: #ffffff;
   --sidebar: #ffffff;
@@ -153,7 +160,6 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 .app { display: flex; width: 100vw; height: 100vh; background: var(--sidebar); position: fixed; inset: 0; overflow: hidden; }
 @supports (height: 100dvh) { .app { height: 100dvh; } }
 
-/* ============ SIDEBAR ============ */
 .sidebar { width: 420px; min-width: 280px; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; position: relative; min-height: 0; overflow: hidden; }
 
 .sidebar-header { padding: 6px 13px; display: flex; align-items: center; gap: 4px; flex-shrink: 0; height: 56px; }
@@ -204,7 +210,6 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 .fab { position: absolute; bottom: 20px; right: 20px; width: 54px; height: 54px; border-radius: 50%; background: var(--accent); color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(51,144,236,.35); z-index: 15; transition: transform .15s, background .15s, box-shadow .15s; }
 .fab:hover { background: var(--accent-hover); transform: scale(1.05); box-shadow: 0 6px 18px rgba(51,144,236,.45); }
 
-/* ============ CHAT WINDOW ============ */
 .chat-window { flex: 1; display: flex; flex-direction: column; background: var(--chat-bg); position: relative; min-height: 0; min-width: 0; overflow: hidden; }
 .chat-window::before {
   content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
@@ -325,7 +330,6 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 .send-btn.uploading .icon { display: none; }
 .send-btn.uploading::after { content: ''; width: 16px; height: 16px; border: 2px solid rgba(51,144,236,.25); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
-/* ============ ACCOUNT MENU ============ */
 .account-menu { position: absolute; inset: 0; background: var(--sidebar); z-index: 25; display: flex; flex-direction: column; transform: translateX(-100%); transition: transform .3s cubic-bezier(.4,0,.2,1); overflow-y: auto; }
 .account-menu.open { transform: translateX(0); }
 .account-header { padding: 12px 13px; display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
@@ -438,7 +442,6 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 .about-version { font-size: 13px; color: var(--text-dim); margin-bottom: 20px; }
 .about-text { font-size: 13.5px; color: var(--text-dim); line-height: 1.55; text-align: left; }
 
-/* ============ USER PROFILE ============ */
 .user-profile-card { padding: 24px 20px 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .user-profile-avatar { width: 110px; height: 110px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 40px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.15); cursor: pointer; transition: transform .15s; }
 .user-profile-avatar:hover { transform: scale(1.03); }
@@ -477,7 +480,7 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 
 <div class="boot" id="bootScreen">
   <div class="boot-spinner"></div>
-  <div class="boot-text">Загрузка…<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
+  <div class="boot-text">Pulse<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
   <button class="boot-retry" id="bootRetry" onclick="location.reload()">Перезагрузить</button>
 </div>
 
@@ -488,7 +491,7 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
       <button data-tab="register">Регистрация</button>
     </div>
     <div id="loginForm">
-      <h2>Вход</h2>
+      <h2>Вход в Pulse</h2>
       <div class="sub">Введите @username и пароль</div>
       <label>@username</label>
       <input id="loginUsername" type="text" placeholder="username">
@@ -497,7 +500,7 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
       <button class="primary-btn" id="loginBtn">Войти</button>
     </div>
     <div id="registerForm" style="display:none">
-      <h2>Регистрация</h2>
+      <h2>Регистрация в Pulse</h2>
       <div class="sub">Придумайте имя, @username и пароль</div>
       <label>Имя</label>
       <input id="regName" type="text" placeholder="Иван Петров" maxlength="30">
@@ -571,7 +574,7 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
 
 <div class="modal-overlay" id="statsModal" style="display:none">
   <div class="modal-card" style="max-width:440px">
-    <h2>Статистика</h2>
+    <h2>Статистика Pulse</h2>
     <div class="sub">Общая статистика</div>
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-value" id="statUsers">—</div><div class="stat-label">Пользователей</div></div>
@@ -747,10 +750,10 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
       </div>
       <div class="about-content">
         <div class="about-logo">💬</div>
-        <div class="about-title">Messenger</div>
-        <div class="about-version">Версия 6.2.0</div>
+        <div class="about-title">Pulse</div>
+        <div class="about-version">Версия 1.0.0</div>
         <div class="about-text">
-          Простой, но функциональный мессенджер с real-time общением, группами, каналами, файлами, реакциями и голосовыми сообщениями.<br><br>
+          Pulse — мессенджер в ритме общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
           <b>Возможности:</b><br>
           • Личные чаты и группы<br>
           • Каналы для публикаций<br>
@@ -923,7 +926,7 @@ var I18N = {
     copied:'Скопировано',profile_saved:'Профиль сохранён',
     photo_uploaded:'Фото готово',
     connection_lost:'Соединение потеряно',connection_restored:'Восстановлено',
-    account_created:'Аккаунт создан',welcome_back_toast:'С возвращением!',
+    account_created:'Аккаунт Pulse создан',welcome_back_toast:'С возвращением в Pulse!',
     enter_name:'Введите имя',invalid_username:'Некорректный @username',enter_username:'Введите @username',
     pwd_short:'Минимум 4 символа',enter_room_name:'Введите название',
     leave_confirm:'Покинуть чат?',kick_confirm:'Исключить?',logout_confirm:'Выйти?',
@@ -948,7 +951,7 @@ var I18N = {
     copied:'Copied',profile_saved:'Profile saved',
     photo_uploaded:'Photo ready',
     connection_lost:'Connection lost',connection_restored:'Restored',
-    account_created:'Account created',welcome_back_toast:'Welcome back!',
+    account_created:'Pulse account created',welcome_back_toast:'Welcome back to Pulse!',
     enter_name:'Enter name',invalid_username:'Invalid @username',enter_username:'Enter @username',
     pwd_short:'At least 4 chars',enter_room_name:'Enter name',
     leave_confirm:'Leave chat?',kick_confirm:'Kick?',logout_confirm:'Logout?',
