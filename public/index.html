@@ -1065,6 +1065,7 @@ function saveSettings(){ try{ localStorage.setItem('messenger_settings', JSON.st
 
     initUI();
     registerSocket();
+    loadVapidAndPushState();
 
     if (savedMe && savedMe.userId && savedTok) {
       me = savedMe;
@@ -1693,4 +1694,817 @@ function renderMessages(){
         } else if (m.fromName) {
           miniAvatarHtml = '<div class="sender-avatar-mini" style="background:#5288c1" data-uid="'+m.from+'">'+esc(m.fromName.slice(0,2).toUpperCase())+'</div>';
         }
-        sn.innerHTML
+        sn.innerHTML = miniAvatarHtml + '<span>' + esc(m.fromName || 'Пользователь') + '</span>';
+        sn.onclick = function(){ openUserProfile(m.from); };
+        wrap.appendChild(sn);
+      }
+
+      var bubble = document.createElement('div');
+      bubble.className = 'bubble' + (m.deleted ? ' del' : '');
+
+      if (!m.deleted && m.replyTo) {
+        var rq = allMsgs.find(function(x){ return x.id === m.replyTo; });
+        var q = document.createElement('div');
+        q.className = 'reply-quote';
+        q.innerHTML = '<div class="author">' + esc(rq ? (rq.fromName || 'Сообщение') : 'Сообщение') + '</div>' +
+                      '<div class="text">' + esc(rq ? (rq.text || (rq.file ? rq.file.name : '')) : '') + '</div>';
+        bubble.appendChild(q);
+      }
+
+      if (m.deleted) {
+        var dtx = document.createElement('div');
+        dtx.className = 'msg-text';
+        dtx.textContent = t('message_deleted');
+        bubble.appendChild(dtx);
+      } else {
+        if (m.file) {
+          var ft = String(m.file.type || '');
+          if (ft.indexOf('image/') === 0) {
+            var im = document.createElement('img');
+            im.className = 'msg-image';
+            im.src = m.file.url;
+            im.dataset.img = m.file.url;
+            im.alt = m.file.name || '';
+            im.loading = 'lazy';
+            bubble.appendChild(im);
+          } else if (ft.indexOf('video/') === 0) {
+            var vd = document.createElement('video');
+            vd.className = 'msg-image';
+            vd.src = m.file.url;
+            vd.controls = true;
+            vd.preload = 'metadata';
+            bubble.appendChild(vd);
+          } else if (ft.indexOf('audio/') === 0) {
+            var ad = document.createElement('audio');
+            ad.style.cssText = 'display:block;margin:3px 0;max-width:100%';
+            ad.src = m.file.url;
+            ad.controls = true;
+            bubble.appendChild(ad);
+          } else {
+            var fc = document.createElement('a');
+            fc.className = 'msg-file';
+            fc.href = m.file.url;
+            fc.download = m.file.name || 'file';
+            fc.target = '_blank';
+            fc.rel = 'noopener';
+            fc.innerHTML = '<span class="fi">' + ICONS.file + '</span>' +
+              '<span style="min-width:0;overflow:hidden"><span class="fn">' + esc(m.file.name || t('file')) + '</span><br>' +
+              '<span class="fs">' + esc(fmtSz(m.file.size || 0)) + '</span></span>';
+            bubble.appendChild(fc);
+          }
+        }
+        if (m.text) {
+          var tx = document.createElement('div');
+          tx.className = 'msg-text';
+          tx.textContent = m.text;
+          bubble.appendChild(tx);
+        }
+        var meta = document.createElement('span');
+        meta.className = 'msg-meta';
+        var metaHtml = esc(m.time || fmtTime(m.timestamp));
+        if (m.edited) metaHtml += ' <span class="msg-edited">' + esc(t('edited')) + '</span>';
+        metaHtml += status(m, currentRoom);
+        meta.innerHTML = metaHtml;
+        bubble.appendChild(meta);
+
+        if (m.reactions && Object.keys(m.reactions).length) {
+          var rwrap = document.createElement('div');
+          rwrap.className = 'reactions';
+          Object.keys(m.reactions).forEach(function(em){
+            var arr = m.reactions[em] || [];
+            if (!arr.length) return;
+            var rb = document.createElement('span');
+            rb.className = 'reaction' + (arr.indexOf(me.userId) >= 0 ? ' mine' : '');
+            rb.innerHTML = esc(em) + '<span class="cnt">' + arr.length + '</span>';
+            rb.onclick = function(e){ e.stopPropagation(); socket.emit('react-message', { messageId: m.id, emoji: em }); };
+            rwrap.appendChild(rb);
+          });
+          bubble.appendChild(rwrap);
+        }
+      }
+
+      wrap.appendChild(bubble);
+      el.appendChild(wrap);
+      prev = m;
+    });
+
+    var tk = Object.keys(typingUsers);
+    if (tk.length) {
+      var names = tk.map(function(k){ return typingUsers[k].name; }).slice(0, 3).join(', ');
+      var ti = document.createElement('div');
+      ti.className = 'typing-indicator';
+      ti.innerHTML = '<span></span><span></span><span></span><span style="margin-left:6px;font-size:12.5px;color:var(--text-dim)">' + esc(names) + '</span>';
+      el.appendChild(ti);
+    }
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderChats() {
+  var el = $('chats');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!me) return;
+  var f = (currentFilter || '').trim().toLowerCase();
+  var match = function(s){ return !f || String(s || '').toLowerCase().indexOf(f) >= 0; };
+
+  function lastFor(key, list) {
+    for (var i = list.length - 1; i >= 0; i--) if (!list[i].deleted) return list[i];
+    return list.length ? list[list.length - 1] : null;
+  }
+  function previewOf(m) {
+    if (!m) return '';
+    if (m.deleted) return t('message_deleted');
+    var who = '';
+    if ((m.to === 'public' || (typeof m.to === 'string' && m.to.indexOf('r_') === 0)) && m.fromName) {
+      who = (m.from === me.userId ? t('you') + ': ' : m.fromName + ': ');
+    }
+    return who + (m.text || (m.file ? '📎 ' + (m.file.name || t('file')) : ''));
+  }
+  function addRow(opts) {
+    var lm = opts.lastMsg;
+    var item = document.createElement('div');
+    item.className = 'chat-item' + (opts.id === currentRoom ? ' active' : '');
+    item.dataset.cid = opts.id;
+
+    var av = document.createElement('div');
+    av.className = 'chat-avatar';
+    av.style.background = opts.color || '#5288c1';
+    if (opts.avatar) {
+      av.style.background = '#000';
+      av.innerHTML = '<img src="' + opts.avatar + '">';
+    } else if (opts.icon) {
+      av.innerHTML = opts.icon;
+    } else {
+      av.textContent = opts.initials || '?';
+    }
+    if (opts.showStatus) {
+      var st = document.createElement('div');
+      st.className = 'status' + (opts.online ? '' : ' offline');
+      av.appendChild(st);
+    }
+    item.appendChild(av);
+
+    var info = document.createElement('div');
+    info.className = 'chat-info';
+    var top = document.createElement('div');
+    top.className = 'chat-top';
+    var nm = document.createElement('div');
+    nm.className = 'chat-name';
+    nm.textContent = opts.name;
+    top.appendChild(nm);
+    var tm = document.createElement('div');
+    tm.className = 'chat-time';
+    if (lm) tm.textContent = fmtTime(lm.timestamp);
+    top.appendChild(tm);
+    info.appendChild(top);
+
+    var bot = document.createElement('div');
+    bot.className = 'chat-bottom';
+    var pv = document.createElement('div');
+    pv.className = 'chat-preview';
+    if (lm) {
+      var unreadCount = unread[opts.id] || 0;
+      if (unreadCount > 0) {
+        var bdg = document.createElement('span');
+        bdg.className = 'chat-badge';
+        bdg.textContent = unreadCount > 99 ? '99+' : unreadCount;
+        pv.appendChild(bdg);
+      }
+      pv.innerHTML += '<span>' + esc(previewOf(lm)) + '</span>';
+      if (mutedChats.indexOf(opts.id) >= 0) pv.innerHTML += '<span class="chat-icons">' + ICONS.bellOff + '</span>';
+      if (lm.pinned) pv.innerHTML += '<span class="chat-icons">' + ICONS.pin + '</span>';
+    }
+    bot.appendChild(pv);
+    info.appendChild(bot);
+    item.appendChild(info);
+
+    item.onclick = function(){ openChat(opts.id); };
+    el.appendChild(item);
+    return item;
+  }
+
+  var pubLast = lastFor('public', allMsgs.filter(function(m){ return m.to === 'public'; }));
+  if (match(t('public_chat'))) addRow({ id:'public', name:t('public_chat'), icon:ICONS.globe, color:'#5288c1', lastMsg:pubLast });
+
+  var savedLast = lastFor('saved', allMsgs.filter(function(m){ return m.to === 'saved' && m.from === me.userId; }));
+  if (match(t('saved'))) addRow({ id:'saved', name:t('saved'), icon:ICONS.bookmark, color:'#2eb872', lastMsg:savedLast });
+
+  var chans = rooms.filter(function(r){ return r.type === 'channel'; });
+  var groups = rooms.filter(function(r){ return r.type !== 'channel'; });
+  var contacts = users.slice();
+
+  function section(title, arr, builder) {
+    if (!arr.length) return;
+    var h = document.createElement('div');
+    h.className = 'section-header';
+    h.textContent = title;
+    el.appendChild(h);
+    arr.forEach(builder);
+  }
+
+  section(t('channels'), chans, function(r){
+    if (!match(r.name)) return;
+    var lm = lastFor(r.id, allMsgs.filter(function(m){ return m.to === r.id; }));
+    addRow({ id:r.id, name:r.name, icon:(r.type === 'channel' ? ICONS.channel : ICONS.group), color:r.color || '#5288c1', lastMsg:lm });
+  });
+  section(t('groups'), groups, function(r){
+    if (!match(r.name)) return;
+    var lm = lastFor(r.id, allMsgs.filter(function(m){ return m.to === r.id; }));
+    addRow({ id:r.id, name:r.name, icon:ICONS.group, color:r.color || '#5288c1', lastMsg:lm });
+  });
+  section(t('personal'), contacts, function(u){
+    if (!match(u.name) && !match(u.username)) return;
+    var lm = lastFor(u.userId, allMsgs.filter(function(m){
+      return (m.from === me.userId && m.to === u.userId) || (m.from === u.userId && m.to === me.userId);
+    }));
+    addRow({ id:u.userId, name:u.name, initials:u.initials, avatar:u.avatar, color:u.color, online:u.online, showStatus:true, lastMsg:lm });
+  });
+
+  if (!el.children.length) {
+    var e2 = document.createElement('div');
+    e2.style.cssText = 'text-align:center;padding:40px 20px;color:var(--text-dim);font-size:13.5px';
+    e2.textContent = t('no_contacts');
+    el.appendChild(e2);
+  }
+}
+
+function roomById(id){ return rooms.find(function(r){ return r.id === id; }); }
+function userById(id){ return users.find(function(u){ return u.userId === id; }); }
+
+function updateHeader() {
+  var av = $('headerAvatar'), nm = $('headerName'), stt = $('headerStatus'), acts = $('headerActions');
+  if (!av || !me) return;
+  acts.innerHTML = '';
+  av.innerHTML = '';
+  av.style.background = '#5288c1';
+
+  function addAct(icon, title, fn) {
+    var b = document.createElement('button');
+    b.className = 'menu-btn';
+    b.title = title;
+    b.innerHTML = icon;
+    b.onclick = fn;
+    acts.appendChild(b);
+  }
+
+  if (currentRoom === 'public') {
+    nm.textContent = t('public_chat');
+    stt.textContent = onlineCountText();
+    av.innerHTML = ICONS.globe;
+    addAct(ICONS.group, t('members_word_plural'), function(){ showPublicMembers(); });
+  } else if (currentRoom === 'saved') {
+    nm.textContent = t('saved');
+    stt.textContent = t('saved_msg');
+    av.style.background = '#2eb872';
+    av.innerHTML = ICONS.bookmark;
+  } else if (typeof currentRoom === 'string' && currentRoom.indexOf('r_') === 0) {
+    var r = roomById(currentRoom);
+    if (!r) { nm.textContent = '—'; stt.textContent = ''; return; }
+    nm.textContent = r.name;
+    stt.textContent = r.members.length + ' ' + t('members_word_plural');
+    av.innerHTML = r.type === 'channel' ? ICONS.channel : ICONS.group;
+    var myRole = r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member');
+    addAct(ICONS.user, t('members_word_plural'), function(){ openMembers(currentRoom); });
+    if (myRole === 'owner' || myRole === 'admin') {
+      addAct(ICONS.link, 'Ссылка-приглашение', function(){ socket.emit('create-invite', { roomId: currentRoom }); });
+      addAct(ICONS.plus, 'Пригласить', function(){
+        $('inviteRoomName').textContent = r.name;
+        $('inviteInput').value = '';
+        $('inviteModal').style.display = 'flex';
+      });
+    }
+    addAct(mutedChats.indexOf(currentRoom) >= 0 ? ICONS.bellOff : ICONS.bell, 'Mute', function(){ toggleMute(currentRoom); });
+    if (myRole !== 'owner') addAct(ICONS.logout, t('leave_confirm'), function(){
+      if (confirm(t('leave_confirm'))) { socket.emit('leave-room', { roomId: currentRoom }); openChat('public'); }
+    });
+  } else {
+    var u = userById(currentRoom);
+    if (!u) {
+      var anyMsg = allMsgs.find(function(m){ return m.from === currentRoom || m.to === currentRoom; });
+      nm.textContent = anyMsg && anyMsg.from === currentRoom ? (anyMsg.fromName || '—') : '—';
+      stt.textContent = '';
+      av.textContent = '?';
+      return;
+    }
+    nm.textContent = u.name;
+    stt.textContent = u.online ? t('online') : t('offline');
+    if (u.avatar) { av.style.background = '#000'; av.innerHTML = '<img src="' + u.avatar + '">'; }
+    else { av.style.background = u.color; av.textContent = u.initials || '?'; }
+    av.style.cursor = 'pointer';
+    av.onclick = function(){ openUserProfile(u.userId); };
+    addAct(mutedChats.indexOf(u.userId) >= 0 ? ICONS.bellOff : ICONS.bell, 'Mute', function(){ toggleMute(u.userId); });
+    addAct(ICONS.user, 'Профиль', function(){ openUserProfile(u.userId); });
+  }
+  updatePinnedBar();
+}
+
+function onlineCountText() {
+  var n = users.filter(function(u){ return u.online; }).length + 1;
+  return n + ' ' + t('online');
+}
+
+function showPublicMembers() {
+  $('membersRoomName').textContent = t('public_chat');
+  var list = $('membersList');
+  list.innerHTML = '';
+  var row = document.createElement('div');
+  row.className = 'member-row';
+  row.innerHTML = '<div class="member-avatar" style="background:' + (me.color || '#5288c1') + '">' + esc(me.initials || '?') + '</div>' +
+    '<div class="member-info"><div class="member-name">' + esc(me.name) + ' (' + t('you') + ')</div></div>';
+  list.appendChild(row);
+  users.forEach(function(u){
+    var r2 = document.createElement('div');
+    r2.className = 'member-row';
+    r2.innerHTML = '<div class="member-avatar" style="' + avStyle(u) + '">' + avHtml(u) + '</div>' +
+      '<div class="member-info"><div class="member-name">' + esc(u.name) + '</div></div>';
+    r2.querySelector('.member-info').onclick = function(){ openUserProfile(u.userId); };
+    list.appendChild(r2);
+  });
+  $('membersModal').style.display = 'flex';
+}
+
+function openMembers(roomId) {
+  var r = roomById(roomId);
+  if (!r) return;
+  $('membersRoomName').textContent = r.name;
+  var list = $('membersList');
+  list.innerHTML = '';
+  var myRole = r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member');
+  r.members.forEach(function(mid){
+    var isOwner = (r.roles[mid] === 'owner') || mid === r.createdBy;
+    var roleTxt = isOwner ? t('owner') : (r.roles[mid] === 'admin' ? t('admin') : t('member'));
+    var roleCls = isOwner ? 'owner' : (r.roles[mid] === 'admin' ? 'admin' : 'member');
+    var u = userById(mid) || dbUserFallback(mid, r);
+    var row = document.createElement('div');
+    row.className = 'member-row';
+    var avHtmlInner = u ? ('<div class="member-avatar" style="' + avStyle(u) + '">' + avHtml(u) + '</div>')
+      : ('<div class="member-avatar" style="background:#5288c1">?</div>');
+    row.innerHTML = avHtmlInner +
+      '<div class="member-info"><div class="member-name">' + esc(u ? u.name : 'Пользователь') +
+      ' <span class="member-role ' + roleCls + '">' + roleTxt + '</span></div></div><div class="member-actions"></div>';
+    if (u) row.querySelector('.member-info').onclick = function(){ openUserProfile(mid); };
+    var canModerate = (myRole === 'owner' || myRole === 'admin') && mid !== me.userId && !isOwner;
+    if (canModerate) {
+      var acts = row.querySelector('.member-actions');
+      if (myRole === 'owner') {
+        var ab = document.createElement('button');
+        ab.title = r.roles[mid] === 'admin' ? t('member') : t('admin');
+        ab.innerHTML = ICONS.star;
+        ab.onclick = function(){ socket.emit('set-role', { roomId: r.id, targetUserId: mid, role: r.roles[mid] === 'admin' ? 'member' : 'admin' }); };
+        acts.appendChild(ab);
+      }
+      var kb = document.createElement('button');
+      kb.className = 'dngr';
+      kb.title = t('kick');
+      kb.innerHTML = ICONS.ban;
+      kb.onclick = function(){
+        if (confirm(t('kick_confirm'))) socket.emit('kick-user', { roomId: r.id, targetUserId: mid });
+      };
+      acts.appendChild(kb);
+    }
+    list.appendChild(row);
+  });
+  $('membersModal').style.display = 'flex';
+}
+
+function dbUserFallback(mid, r) {
+  var msg = allMsgs.find(function(m){ return m.from === mid && m.to === r.id; });
+  if (!msg) return null;
+  return { userId: mid, name: msg.fromName || 'Пользователь', color: '#5288c1', initials: (msg.fromName || '?').slice(0,2).toUpperCase(), avatar: null, online: false };
+}
+
+function updatePinnedBar() {
+  var bar = $('pinnedBar');
+  var msgs = chatMsgs(currentRoom);
+  var pinned = null;
+  for (var i = msgs.length - 1; i >= 0; i--) if (msgs[i].pinned && !msgs[i].deleted) { pinned = msgs[i]; break; }
+  if (!pinned) { bar.classList.remove('show'); return; }
+  $('pinAuthor').textContent = pinned.fromName || me.name;
+  $('pinText').textContent = pinned.text || (pinned.file ? (pinned.file.name || t('file')) : '');
+  bar.classList.add('show');
+}
+
+function updateInputState() {
+  var ta = $('messageInput'), send = $('sendBtn'), att = $('attachBtn');
+  var blocked = false;
+  if (typeof currentRoom === 'string' && currentRoom.indexOf('r_') === 0) {
+    var r = roomById(currentRoom);
+    if (r) {
+      var role = r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member');
+      if (r.type === 'channel' && role !== 'owner' && role !== 'admin') blocked = true;
+    }
+  }
+  ta.disabled = blocked;
+  att.disabled = blocked;
+  send.disabled = blocked;
+  ta.placeholder = blocked ? t('only_admins') : 'Напишите сообщение...';
+}
+
+function openChat(id) {
+  currentRoom = id;
+  delete unread[id];
+  replyClear();
+  pendingClear();
+  $('sidebar').classList.add('hide');
+  renderChats();
+  renderMessages();
+  updateHeader();
+  updateInputState();
+  markRead();
+  if (id !== 'public' && id !== 'saved' && !(typeof id === 'string' && id.indexOf('r_') === 0)) {
+    var exists = users.some(function(u){ return u.userId === id; });
+    if (!exists && id !== me.userId) socket.emit('add-contact', { contactId: id });
+  }
+}
+
+function markRead() {
+  if (!me || !socket || !socket.connected) return;
+  var ids = chatMsgs(currentRoom)
+    .filter(function(m){ return m.from !== me.userId && !(m.readBy || []).includes(me.userId); })
+    .map(function(m){ return m.id; });
+  if (ids.length) socket.emit('read', { messageIds: ids });
+}
+
+function toggleMute(cid) {
+  var muted = mutedChats.indexOf(cid) < 0;
+  socket.emit('mute-chat', { chatId: cid, muted: muted });
+  toast(muted ? t('muted_off') : t('muted_on'));
+}
+
+function pickFile(f) {
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) return toast(t('file_too_big'));
+  pendingFile = f;
+  var pf = $('pendingFile');
+  pf.innerHTML = '';
+  var inner = document.createElement('div');
+  inner.className = 'pending-inner';
+  var info = document.createElement('div');
+  info.className = 'pending-info';
+  var url = null;
+  if (f.type.indexOf('image/') === 0) {
+    url = URL.createObjectURL(f);
+    var im = document.createElement('img');
+    im.className = 'pending-preview-img';
+    im.src = url;
+    inner.appendChild(im);
+  }
+  info.innerHTML = '<div class="n">' + esc(f.name) + '</div><div class="s">' + esc(fmtSz(f.size)) + '</div>';
+  inner.appendChild(info);
+  var rm = document.createElement('button');
+  rm.className = 'pending-remove';
+  rm.innerHTML = ICONS.close;
+  rm.onclick = pendingClear;
+  inner.appendChild(rm);
+  pf.appendChild(inner);
+  pf.classList.add('show');
+}
+
+function pendingClear() {
+  pendingFile = null;
+  var pf = $('pendingFile');
+  pf.classList.remove('show');
+  pf.innerHTML = '';
+}
+
+function setReply(m) {
+  replyTo = m.id;
+  var rp = $('replyPreview');
+  rp.innerHTML = '';
+  var inner = document.createElement('div');
+  inner.className = 'reply-preview-inner';
+  var info = document.createElement('div');
+  info.className = 'reply-preview-info';
+  info.innerHTML = '<div class="reply-preview-author">' + esc(m.fromName || t('you')) + '</div>' +
+    '<div class="reply-preview-text">' + esc(m.text || (m.file ? (m.file.name || t('file')) : '')) + '</div>';
+  inner.appendChild(info);
+  var cl = document.createElement('button');
+  cl.className = 'reply-preview-close';
+  cl.innerHTML = ICONS.close;
+  cl.onclick = replyClear;
+  inner.appendChild(cl);
+  rp.appendChild(inner);
+  rp.classList.add('show');
+  $('messageInput').focus();
+}
+
+function replyClear() {
+  replyTo = null;
+  var rp = $('replyPreview');
+  rp.classList.remove('show');
+  rp.innerHTML = '';
+}
+
+async function sendMessage() {
+  if (!me || !socket || !socket.connected) return toast(t('no_connection'));
+  var ta = $('messageInput');
+  var text = ta.value.trim();
+  if (!text && !pendingFile) return;
+  if (typeof currentRoom === 'string' && currentRoom.indexOf('r_') === 0) {
+    var r = roomById(currentRoom);
+    if (r && r.type === 'channel') {
+      var role = r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member');
+      if (role !== 'owner' && role !== 'admin') return toast(t('only_admins'));
+    }
+  }
+  var filePayload = null;
+  if (pendingFile) {
+    var btn = $('sendBtn');
+    btn.classList.add('uploading');
+    btn.disabled = true;
+    try {
+      var up = await uploadFile(pendingFile);
+      filePayload = { url: up.url, name: up.name, size: up.size, type: up.type };
+    } catch(e) {
+      btn.classList.remove('uploading');
+      btn.disabled = false;
+      return toast(t('error') + ': ' + e.message);
+    }
+    btn.classList.remove('uploading');
+    btn.disabled = false;
+  }
+  var msg = {
+    id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    from: me.userId, fromName: me.name,
+    to: currentRoom,
+    text: text, file: filePayload, replyTo: replyTo,
+    timestamp: Date.now(), time: fmtTime(Date.now()),
+    deliveredTo: [me.userId], readBy: [me.userId], reactions: {},
+    edited: false, deleted: false, pinned: false
+  };
+  socket.emit('message', msg);
+  addMsg(msg);
+  ta.value = '';
+  ta.style.height = 'auto';
+  pendingClear();
+  replyClear();
+}
+
+function openMsgActions(mid, x, y) {
+  if (activeCtx) { activeCtx.remove(); activeCtx = null; }
+  var m = allMsgs.find(function(mm){ return mm.id === mid; });
+  if (!m || m.deleted) return;
+  var bar = document.createElement('div');
+  bar.className = 'reactions-bar';
+  ['👍','❤️','🔥','😂','😮','😢'].forEach(function(em){
+    var b = document.createElement('button');
+    b.textContent = em;
+    b.onclick = function(){
+      socket.emit('react-message', { messageId: mid, emoji: em });
+      bar.remove(); activeCtx = null;
+    };
+    bar.appendChild(b);
+  });
+  var menu = document.createElement('div');
+  menu.className = 'context-menu';
+  function item(icon, label, fn, danger) {
+    var it = document.createElement('div');
+    it.className = 'ctx-item' + (danger ? ' danger' : '');
+    it.innerHTML = icon + '<span>' + esc(label) + '</span>';
+    it.onclick = function(){ menu.remove(); activeCtx = null; fn(); };
+    menu.appendChild(it);
+  }
+  item(ICONS.reply, t('reply'), function(){ setReply(m); });
+  item(ICONS.copy, t('copy'), function(){ copyText(m.text || ''); });
+  var canPin = true;
+  if (typeof m.to === 'string' && m.to.indexOf('r_') === 0) {
+    var r = roomById(m.to);
+    var role = r ? (r.roles[me.userId] || (r.createdBy === me.userId ? 'owner' : 'member')) : 'member';
+    canPin = (role === 'owner' || role === 'admin');
+  }
+  if (canPin) item(ICONS.pin, m.pinned ? t('unpin') : t('pin'), function(){ socket.emit('pin-message', { messageId: mid }); });
+  if (m.from === me.userId && m.text && !m.file) {
+    item(ICONS.edit, t('edit'), function(){ openEditModal(m); });
+  }
+  if (m.from === me.userId) {
+    item(ICONS.trash, t('delete'), function(){
+      if (confirm(t('delete_confirm'))) socket.emit('delete-message', { messageId: mid });
+    }, true);
+  }
+  var vw = window.innerWidth, vh = window.innerHeight;
+  bar.style.left = Math.max(8, Math.min(x - 130, vw - 290)) + 'px';
+  bar.style.top = Math.max(8, y - 58) + 'px';
+  if (y - 58 < 8) bar.style.top = Math.min(vh - 120, y + 40) + 'px';
+  menu.style.left = Math.max(8, Math.min(x, vw - 210)) + 'px';
+  document.body.appendChild(bar);
+  document.body.appendChild(menu);
+  menu.style.top = Math.min(y + 10, vh - menu.getBoundingClientRect().height - 20) + 'px';
+  activeCtx = menu;
+}
+
+function openEditModal(m) {
+  var ov = document.createElement('div');
+  ov.className = 'edit-overlay';
+  ov.innerHTML = '<div class="edit-modal"><h3>' + esc(t('edit')) + '</h3>' +
+    '<textarea id="editArea">' + esc(m.text || '') + '</textarea>' +
+    '<div class="edit-actions"><button class="edit-cancel">' + esc(LANG === 'ru' ? 'Отмена' : 'Cancel') + '</button>' +
+    '<button class="edit-save">' + esc(LANG === 'ru' ? 'Сохранить' : 'Save') + '</button></div></div>';
+  document.body.appendChild(ov);
+  var taE = ov.querySelector('#editArea');
+  taE.focus();
+  taE.setSelectionRange(taE.value.length, taE.value.length);
+  ov.querySelector('.edit-cancel').onclick = function(){ ov.remove(); };
+  ov.querySelector('.edit-save').onclick = function(){
+    var v = taE.value.trim();
+    if (v && v !== m.text) socket.emit('edit-message', { messageId: m.id, newText: v });
+    ov.remove();
+  };
+  ov.onclick = function(e){ if (e.target === ov) ov.remove(); };
+}
+
+function renderSearchUsers(results) {
+  var el = $('searchResults');
+  el.innerHTML = '';
+  if (!results || !results.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px 15px;color:var(--text-dim);font-size:13px">' + t('found_nothing') + '</div>';
+    return;
+  }
+  results.forEach(function(u){
+    var it = document.createElement('div');
+    it.className = 'result-item';
+    var isContact = users.some(function(x){ return x.userId === u.userId; });
+    it.innerHTML = '<div class="result-avatar" style="' + avStyle(u) + '">' + avHtml(u) + '</div>' +
+      '<div class="result-info"><div class="result-name">' + esc(u.name) + '</div>' +
+      '<div class="result-username">@' + esc(u.username) + (u.online ? ' · ' + t('online') : '') + '</div></div>';
+    var act = document.createElement('button');
+    act.className = 'result-action';
+    act.textContent = isContact ? t('personal') : t('add_contact');
+    act.onclick = function(e){
+      e.stopPropagation();
+      if (!isContact) socket.emit('add-contact', { contactId: u.userId });
+      $('searchOverlay').classList.remove('open');
+      setTimeout(function(){ openChat(u.userId); }, 200);
+    };
+    it.appendChild(act);
+    it.onclick = function(){ openUserProfile(u.userId); };
+    el.appendChild(it);
+  });
+}
+
+function renderSearchMsgs(query, results) {
+  var el = $('msgSearchResults');
+  el.innerHTML = '';
+  if (!results || !results.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px 15px;color:var(--text-dim);font-size:13px">' + t('found_nothing') + '</div>';
+    return;
+  }
+  results.slice().reverse().forEach(function(m){
+    var it = document.createElement('div');
+    it.className = 'result-item';
+    var chName = m.to === 'public' ? t('public_chat') : m.to === 'saved' ? t('saved') :
+      (typeof m.to === 'string' && m.to.indexOf('r_') === 0) ? ((roomById(m.to) || {}).name || '…') :
+      (m.from === me.userId ? ((userById(m.to) || {}).name || m.to) : (m.fromName || t('you')));
+    var txt = (m.text || '').toLowerCase();
+    var idx = txt.indexOf(query);
+    var snippet = esc(m.text || '');
+    if (idx >= 0) snippet = esc(m.text.slice(Math.max(0, idx - 30), idx)) + '<b style="color:var(--accent)">' + esc(m.text.slice(idx, idx + query.length)) + '</b>' + esc(m.text.slice(idx + query.length, idx + query.length + 60));
+    it.innerHTML = '<div class="result-avatar" style="background:#5288c1">' + esc((m.fromName || '?').slice(0,2).toUpperCase()) + '</div>' +
+      '<div class="result-info"><div class="result-name">' + esc(m.fromName || '') + ' · ' + esc(chName) + '</div>' +
+      '<div class="result-username">' + snippet + '</div></div>';
+    it.onclick = function(){
+      $('msgSearchOverlay').classList.remove('open');
+      var target = chatKey(m);
+      openChat(target);
+      setTimeout(function(){
+        var w = document.querySelector('.msg-wrap[data-mid="' + m.id + '"]');
+        if (w) { w.scrollIntoView({ block: 'center' }); w.style.outline = '2px solid var(--accent)'; setTimeout(function(){ w.style.outline = ''; }, 1600); }
+      }, 300);
+    };
+    el.appendChild(it);
+  });
+}
+
+function updateAccMenu() {
+  if (!me) return;
+  var av = $('accAvatar');
+  if (me.avatar) { av.innerHTML = '<img src="' + me.avatar + '">'; av.style.background = '#000'; }
+  else { av.textContent = me.initials || '?'; av.style.background = me.color || '#5288c1'; }
+  $('accName').textContent = me.name || '';
+  $('accUser').textContent = me.username ? '@' + me.username : '';
+  $('nightToggle').classList.toggle('on', settings.theme === 'dark');
+  $('accThemeHint').textContent = settings.theme === 'dark' ? 'Тёмная' : 'Светлая';
+  $('pushToggle').classList.toggle('on', pushEnabled);
+  $('accNotifyHint').textContent = pushEnabled ? 'Включены' : 'Выключены';
+}
+
+function updateThemePicker() {
+  document.querySelectorAll('.theme-o').forEach(function(o){ o.classList.toggle('selected', o.dataset.th === settings.theme); });
+  document.querySelectorAll('.lang-o').forEach(function(o){ o.classList.toggle('selected', o.dataset.lang === (settings.language || 'ru')); });
+  var picker = $('accentPicker');
+  if (picker) {
+    picker.innerHTML = '';
+    ACCENTS.forEach(function(c){
+      var s = document.createElement('div');
+      s.className = 'accent-swatch' + (c === settings.accent ? ' active' : '');
+      s.style.background = c;
+      s.onclick = function(){
+        settings.accent = c; applyTheme(); saveSettings(); updateThemePicker();
+      };
+      picker.appendChild(s);
+    });
+  }
+  updateAccMenu();
+}
+
+function openProfile() {
+  profileDraft = { avatar: me.avatar || null };
+  $('profileName').value = me.name || '';
+  $('profileUsername').value = me.username ? '@' + me.username : '';
+  updateProfilePreview();
+  $('profileModal').style.display = 'flex';
+}
+
+function updateProfilePreview() {
+  var av = $('avatarPreview');
+  var a = profileDraft ? profileDraft.avatar : null;
+  if (a) { av.innerHTML = '<img src="' + a + '">'; av.style.background = '#000'; }
+  else { av.textContent = me.initials || '?'; av.style.background = me.color || '#5288c1'; }
+  $('avatarRemoveBtn').style.display = a ? 'inline-block' : 'none';
+}
+
+function openStats() {
+  fetch('/stats').then(function(r){ return r.json(); }).then(function(s){
+    $('statUsers').textContent = s.totalUsers;
+    $('statOnline').textContent = s.online;
+    $('statMessages').textContent = s.totalMessages;
+    $('statRooms').textContent = s.totalRooms;
+    $('statFiles').textContent = s.totalFileMsgs;
+    $('statReactions').textContent = s.totalReactions;
+    $('statsModal').style.display = 'flex';
+  }).catch(function(){ toast(t('error')); });
+}
+
+function registerPushSW() {
+  if (!('serviceWorker' in navigator)) return Promise.resolve(false);
+  return navigator.serviceWorker.register('/sw.js').then(function(){ return true; }).catch(function(){ return false; });
+}
+
+function togglePush() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) return toast(t('no_connection'));
+  if (pushEnabled) {
+    pushEnabled = false;
+    localStorage.setItem('pulse_push', 'off');
+    if (me) fetch('/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId }) }).catch(function(){});
+    updateAccMenu();
+    toast(t('muted_off'));
+    return;
+  }
+  Notification.requestPermission().then(function(perm){
+    if (perm !== 'granted') { toast(t('error')); return; }
+    registerPushSW().then(function(ok){
+      if (!ok) return toast(t('error'));
+      return navigator.serviceWorker.ready;
+    }).then(function(reg){
+      if (!reg) return;
+      return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(window.__VAPID_KEY || '') });
+    }).then(function(sub){
+      if (!sub || !me) return;
+      pushEnabled = true;
+      localStorage.setItem('pulse_push', 'on');
+      fetch('/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: me.userId, subscription: sub.toJSON() }) }).catch(function(){});
+      updateAccMenu();
+      toast(t('muted_on'));
+    }).catch(function(e){ toast(t('error') + ': ' + (e.message || '')); });
+  });
+}
+
+function urlBase64ToUint8Array(base64String) {
+  var padding = '='.repeat((4 - base64String.length % 4) % 4);
+  var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  var rawData = atob(base64);
+  var outputArray = new Uint8Array(rawData.length);
+  for (var i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+function loadVapidAndPushState() {
+  fetch('/vapid-public-key').then(function(r){ return r.json(); }).then(function(d){
+    window.__VAPID_KEY = d.key || '';
+  }).catch(function(){});
+  if (localStorage.getItem('pulse_push') === 'on' && 'Notification' in window && Notification.permission === 'granted') {
+    pushEnabled = true;
+    updateAccMenu();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  // drag&drop files
+  var mc = $('messages');
+  if (mc) {
+    ['dragenter','dragover'].forEach(function(ev){
+      mc.addEventListener(ev, function(e){ e.preventDefault(); });
+    });
+    mc.addEventListener('drop', function(e){
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+    });
+  }
+});
+
+// expose helpers used inline
+window.openChat = openChat;
+window.sendMessage = sendMessage;
+</script>
+</body>
+</html>

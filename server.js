@@ -405,8 +405,9 @@ io.on('connection', (socket) => {
     const userId = socket.data.userId;
     const m = db.messages.find(x => x.id === data.messageId);
     if (!m) return;
-    if (m.to.indexOf('r_') === 0) {
+    if (typeof m.to === 'string' && m.to.indexOf('r_') === 0) {
       const r = db.rooms[m.to];
+      if (!r) return;
       const role = (r.roles && r.roles[userId]) || (r.createdBy === userId ? 'owner' : 'member');
       if (role !== 'owner' && role !== 'admin') return;
     }
