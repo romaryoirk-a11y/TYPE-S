@@ -1,13 +1,13 @@
 {
   "name": "Pulse — мессенджер",
   "short_name": "Pulse",
-  "description": "Pulse — мессенджер в ритме общения.",
+  "description": "Pulse — ретро-мессенджер в стиле Game Boy.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#ffffff",
-  "theme_color": "#3390ec",
+  "background_color": "#dfe8bc",
+  "theme_color": "#306230",
   "lang": "ru",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
