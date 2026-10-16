@@ -1,945 +1,690 @@
+'use strict';
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
-const multer = require('multer');
-const webpush = require('web-push');
-const { MongoClient } = require('mongodb');
-const bcrypt = require('bcryptjs');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const { Server } = require('socket.io');
 
-console.log('🟢 Запуск Pulse...');
-console.log('📦 Node', process.version);
+const PORT = process.env.PORT || 3000;
+const DATA_DIR = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'db.json');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-if (!process.env.MONGODB_URI) {
-  console.error('❌ MONGODB_URI не задана');
-  process.exit(1);
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
+let webpush = null;
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  try {
+    webpush = require('web-push');
+    webpush.setVapidDetails('mailto:admin@example.com', VAPID_PUBLIC, VAPID_PRIVATE);
+  } catch (e) { console.warn('[push] disabled:', e.message); }
 }
 
+// ---------- DB ----------
+let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {} };
+try {
+  if (fs.existsSync(DATA_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    db = Object.assign(db, raw);
+  }
+} catch (e) { console.error('[db] load failed:', e.message); }
+
+let saveTimer = null;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { fs.writeFileSync(DATA_FILE, JSON.stringify(db)); }
+    catch (e) { console.error('[db] save failed:', e.message); }
+  }, 200);
+}
+
+// ---------- Sessions / presence ----------
+const sessions = new Map();   // token -> userId
+const online = new Map();     // userId -> Set<socketId>
+
+// ---------- Express ----------
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  maxHttpBufferSize: 30 * 1024 * 1024,
-  cors: { origin: '*' },
-  transports: ['polling', 'websocket'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000
-});
+const io = new Server(server, { maxHttpBufferSize: 12 * 1024 * 1024 });
 
-const mongoClient = new MongoClient(process.env.MONGODB_URI, {
-  serverSelectionTimeoutMS: 10000,
-  connectTimeoutMS: 10000
-});
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-let db, usersCol, messagesCol, roomsCol, subsCol, configCol, invitesCol;
-
-async function initDB() {
-  console.log('🔌 MongoDB...');
-  await mongoClient.connect();
-  db = mongoClient.db('messenger');
-  usersCol = db.collection('users');
-  messagesCol = db.collection('messages');
-  roomsCol = db.collection('rooms');
-  subsCol = db.collection('subscriptions');
-  configCol = db.collection('config');
-  invitesCol = db.collection('invites');
-
-  await usersCol.createIndex({ username: 1 }, { unique: true, sparse: true });
-  await usersCol.createIndex({ userId: 1 }, { unique: true });
-  await messagesCol.createIndex({ timestamp: -1 });
-  await messagesCol.createIndex({ to: 1, timestamp: -1 });
-  await messagesCol.createIndex({ from: 1, timestamp: -1 });
-  await messagesCol.createIndex({ id: 1 }, { unique: true, sparse: true });
-  await roomsCol.createIndex({ id: 1 }, { unique: true });
-  await invitesCol.createIndex({ code: 1 }, { unique: true });
-
-  console.log('✅ MongoDB готова');
-}
-
-let messages = [];
-let knownUsers = {};
-let rooms = {};
-let subscriptions = {};
-
-async function loadData() {
-  console.log('📥 Загрузка данных...');
-  const usersArr = await usersCol.find({}).toArray();
-  knownUsers = {};
-  usersArr.forEach(u => { knownUsers[u.userId] = u; });
-  const roomsArr = await roomsCol.find({}).toArray();
-  rooms = {};
-  roomsArr.forEach(r => {
-    if (!r.roles && Array.isArray(r.admins)) {
-      r.roles = {};
-      r.members.forEach(m => { r.roles[m] = r.admins.includes(m) ? 'admin' : 'member'; });
-      if (r.createdBy) r.roles[r.createdBy] = 'owner';
-    }
-    if (!Array.isArray(r.pinnedMessages)) r.pinnedMessages = [];
-    rooms[r.id] = r;
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const b64 = req.file.buffer.toString('base64');
+  res.json({
+    url: 'data:' + req.file.mimetype + ';base64,' + b64,
+    name: req.file.originalname,
+    size: req.file.size,
+    type: req.file.mimetype
   });
-  const subsArr = await subsCol.find({}).toArray();
-  subscriptions = {};
-  subsArr.forEach(s => { subscriptions[s.userId] = s.subscriptions || []; });
-  const msgsArr = await messagesCol.find({}).sort({ timestamp: -1 }).limit(10000).toArray();
-  messages = msgsArr.map(m => ({
-    ...m,
-    edited: m.edited || false,
-    deleted: m.deleted || false,
-    pinned: m.pinned || false,
-    reactions: m.reactions || {},
-    replyTo: m.replyTo || null
-  })).reverse();
-  console.log(`✅ ${Object.keys(knownUsers).length} польз., ${messages.length} сообщ., ${Object.keys(rooms).length} комнат`);
-}
-
-async function saveUser(userId) {
-  try {
-    const u = knownUsers[userId];
-    if (!u) return;
-    await usersCol.updateOne({ userId }, { $set: u }, { upsert: true });
-  } catch (e) { console.error('saveUser:', e.message); }
-}
-
-async function saveMessage(msg) {
-  try {
-    await messagesCol.insertOne(msg);
-    const count = await messagesCol.countDocuments();
-    if (count > 50000) {
-      const old = await messagesCol.find({}).sort({ timestamp: 1 }).limit(count - 50000).toArray();
-      await messagesCol.deleteMany({ _id: { $in: old.map(o => o._id) } });
-    }
-  } catch (e) { console.error('saveMessage:', e.message); }
-}
-
-async function updateMessage(id, updates) {
-  try { await messagesCol.updateOne({ id }, { $set: updates }); } catch (e) {}
-}
-
-async function saveRoom(roomId) {
-  try {
-    const r = rooms[roomId];
-    if (!r) return;
-    await roomsCol.replaceOne({ id: roomId }, r, { upsert: true });
-  } catch (e) {}
-}
-
-async function deleteRoom(roomId) {
-  try { await roomsCol.deleteOne({ id: roomId }); } catch (e) {}
-}
-
-async function saveSubs(userId) {
-  try {
-    const arr = subscriptions[userId] || [];
-    await subsCol.updateOne({ userId }, { $set: { userId, subscriptions: arr } }, { upsert: true });
-  } catch (e) {}
-}
-
-let vapidKeys;
-async function initVapid() {
-  try {
-    const doc = await configCol.findOne({ _id: 'vapid' });
-    if (doc && doc.publicKey) vapidKeys = { publicKey: doc.publicKey, privateKey: doc.privateKey };
-    else {
-      vapidKeys = webpush.generateVAPIDKeys();
-      await configCol.updateOne({ _id: 'vapid' }, { $set: vapidKeys }, { upsert: true });
-    }
-    webpush.setVapidDetails('mailto:admin@pulse.app', vapidKeys.publicKey, vapidKeys.privateKey);
-  } catch (e) {
-    vapidKeys = webpush.generateVAPIDKeys();
-  }
-}
-
-app.use(express.json({ limit: '30mb' }));
-app.use((req, res, next) => {
-  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-  next();
-});
-app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false }));
-
-app.get('/health', async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      app: 'Pulse',
-      version: '1.0.0',
-      storage: 'mongodb-only',
-      uptime: Math.round(process.uptime()),
-      users: await usersCol.countDocuments(),
-      rooms: await roomsCol.countDocuments(),
-      messages: await messagesCol.countDocuments(),
-      online: online.size,
-      socketio: 'ready'
-    });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.get('/stats', async (req, res) => {
-  try {
-    const totalUsers = await usersCol.countDocuments();
-    const totalMessages = await messagesCol.countDocuments();
-    const totalRooms = await roomsCol.countDocuments();
-    const totalFileMsgs = messages.filter(m => m.file).length;
-    const totalReactions = messages.reduce((sum, m) => sum + Object.keys(m.reactions || {}).length, 0);
-    res.json({ totalUsers, totalMessages, totalRooms, totalFileMsgs, totalReactions, online: online.size });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+app.get('/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
+
+app.get('/stats', (_req, res) => {
+  let reactions = 0, files = 0;
+  db.messages.forEach(m => {
+    if (m.deleted) return;
+    if (m.file) files++;
+    if (m.reactions) Object.values(m.reactions).forEach(a => reactions += a.length);
+  });
+  res.json({
+    totalUsers: Object.keys(db.users).length,
+    online: online.size,
+    totalMessages: db.messages.filter(m => !m.deleted).length,
+    totalRooms: Object.keys(db.rooms).length,
+    totalFileMsgs: files,
+    totalReactions: reactions
+  });
+});
+
+app.get('/vapid-public-key', (_req, res) => res.json({ key: VAPID_PUBLIC || '' }));
+
+app.post('/subscribe', (req, res) => {
+  const { userId, subscription } = req.body || {};
+  if (!userId || !subscription) return res.status(400).json({ error: 'bad request' });
+  db.subs[userId] = subscription;
+  save();
+  res.json({ ok: true });
+});
+
+app.post('/unsubscribe', (req, res) => {
+  const { userId } = req.body || {};
+  if (userId) { delete db.subs[userId]; save(); }
+  res.json({ ok: true });
 });
 
 app.get('/join/:code', (req, res) => {
-  res.redirect('/?invite=' + req.params.code);
+  res.redirect('/?invite=' + encodeURIComponent(req.params.code));
 });
 
-app.get('/vapid-public-key', (req, res) => res.json({ key: vapidKeys.publicKey }));
+// ---------- Helpers ----------
+const now = () => Date.now();
+const uid = (p) => (p || 'x') + '_' + now().toString(36) + Math.random().toString(36).slice(2, 8);
+const newToken = () => crypto.randomBytes(24).toString('hex');
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+function pubUser(u) {
+  if (!u) return null;
+  return {
+    userId: u.userId, name: u.name, username: u.username,
+    color: u.color, initials: u.initials, avatar: u.avatar || null,
+    online: online.has(u.userId)
+  };
+}
 
-app.post('/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
-    const base64 = req.file.buffer.toString('base64');
-    res.json({
-      url: `data:${req.file.mimetype};base64,${base64}`,
-      name: req.file.originalname,
-      type: req.file.mimetype,
-      size: req.file.size
+function canSeeMessage(m, userId) {
+  if (m.to === 'public') return true;
+  if (m.to === 'saved') return m.from === userId;
+  if (typeof m.to === 'string' && m.to.indexOf('r_') === 0) {
+    const r = db.rooms[m.to];
+    return !!(r && r.members && r.members.indexOf(userId) >= 0);
+  }
+  return m.from === userId || m.to === userId;
+}
+
+function msgsFor(userId) {
+  return db.messages.filter(m => canSeeMessage(m, userId));
+}
+
+function usersForViewer(userId) {
+  const ids = new Set();
+  const me = db.users[userId];
+  if (me && Array.isArray(me.contacts)) me.contacts.forEach(id => ids.add(id));
+
+  db.messages.forEach(m => {
+    if (m.from === userId) {
+      if (m.to !== 'public' && m.to !== 'saved' && String(m.to).indexOf('r_') !== 0) ids.add(m.to);
+    } else if (canSeeMessage(m, userId)) {
+      ids.add(m.from);
+    }
+  });
+  Object.values(db.rooms).forEach(r => {
+    if (r.members && r.members.indexOf(userId) >= 0) r.members.forEach(id => ids.add(id));
+  });
+  ids.delete(userId);
+
+  const out = [];
+  ids.forEach(id => { if (db.users[id]) out.push(pubUser(db.users[id])); });
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+function roomView(r) {
+  return {
+    id: r.id, name: r.name, type: r.type,
+    description: r.description || '',
+    members: r.members.slice(),
+    roles: Object.assign({}, r.roles),
+    createdBy: r.createdBy,
+    color: r.color || '#5288c1'
+  };
+}
+const roomsList = () => Object.values(db.rooms).map(roomView);
+
+function emitToUser(userId, event, data) {
+  const set = online.get(userId);
+  if (!set) return;
+  set.forEach(sid => io.to(sid).emit(event, data));
+}
+
+function broadcastRoomsToAll() {
+  const list = roomsList();
+  io.sockets.sockets.forEach(s => { if (s.data.userId) s.emit('rooms', list); });
+}
+function broadcastUsersToAll() {
+  io.sockets.sockets.forEach(s => {
+    if (s.data.userId) s.emit('users', usersForViewer(s.data.userId));
+  });
+}
+
+function canWriteRoom(userId, room) {
+  if (!room) return false;
+  const role = (room.roles && room.roles[userId]) || (room.createdBy === userId ? 'owner' : 'member');
+  if (room.type === 'channel') return role === 'owner' || role === 'admin';
+  return true;
+}
+function inRoom(userId, roomId) {
+  const r = db.rooms[roomId];
+  return !!(r && r.members && r.members.indexOf(userId) >= 0);
+}
+
+function sendPush(userId, title, body) {
+  if (!webpush || !db.subs[userId]) return;
+  webpush.sendNotification(db.subs[userId], JSON.stringify({ title, body }))
+    .catch(() => { delete db.subs[userId]; save(); });
+}
+
+// ---------- Socket.IO ----------
+io.on('connection', (socket) => {
+  socket.data.userId = null;
+
+  function attachUser(userId, token, isNewAccount) {
+    socket.data.userId = userId;
+    if (!online.has(userId)) online.set(userId, new Set());
+    online.get(userId).add(socket.id);
+    const u = db.users[userId];
+    socket.emit('joined', {
+      user: Object.assign({}, u, { password: undefined }),
+      userId, token, isNewAccount: !!isNewAccount
     });
-  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
-});
-
-app.post('/subscribe', async (req, res) => {
-  try {
-    const { userId, subscription } = req.body || {};
-    if (!userId || !subscription?.endpoint) return res.status(400).json({ error: 'bad' });
-    if (!subscriptions[userId]) subscriptions[userId] = [];
-    if (!subscriptions[userId].some(s => s.endpoint === subscription.endpoint)) {
-      subscriptions[userId].push(subscription);
-      await saveSubs(userId);
-    }
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: 'err' }); }
-});
-
-app.post('/unsubscribe', async (req, res) => {
-  try {
-    const { userId, endpoint } = req.body || {};
-    if (subscriptions[userId]) {
-      subscriptions[userId] = subscriptions[userId].filter(s => s.endpoint !== endpoint);
-      await saveSubs(userId);
-    }
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: 'err' }); }
-});
-
-const online = new Map();
-const safeUsername = (u) => String(u || '').replace(/^@/, '').trim();
-
-function contactListFor(userId) {
-  const u = knownUsers[userId];
-  if (!u || !Array.isArray(u.contacts)) return [];
-  return u.contacts.map(cid => {
-    const c = knownUsers[cid];
-    if (!c) return null;
-    return {
-      userId: cid, name: c.name, username: c.username,
-      color: c.color, initials: c.initials, avatar: c.avatar || null,
-      online: online.has(cid)
-    };
-  }).filter(Boolean);
-}
-
-function emitUserListTo(userId) {
-  if (!knownUsers[userId]) return;
-  io.to('user_' + userId).emit('users', contactListFor(userId));
-}
-
-function broadcastUserLists() {
-  try { Object.keys(knownUsers).forEach(uid => emitUserListTo(uid)); } catch (e) {}
-}
-
-const allUserIds = () => Object.keys(knownUsers);
-
-function visibleMessagesFor(userId) {
-  return messages.filter(m => {
-    if (!m || !m.to) return false;
-    if (m.to === 'public') return true;
-    if (m.to === 'saved') return m.from === userId;
-    if (typeof m.to === 'string' && m.to.startsWith('r_')) {
-      const room = rooms[m.to];
-      return !!(room && Array.isArray(room.members) && room.members.includes(userId));
-    }
-    return m.from === userId || m.to === userId;
-  });
-}
-
-function messageRecipients(m) {
-  if (!m || !m.to) return [];
-  if (m.to === 'public') return allUserIds();
-  if (m.to === 'saved') return [m.from];
-  if (typeof m.to === 'string' && m.to.startsWith('r_')) {
-    return (rooms[m.to] && Array.isArray(rooms[m.to].members)) ? rooms[m.to].members : [];
+    socket.emit('history', msgsFor(userId));
+    socket.emit('rooms', roomsList());
+    socket.emit('users', usersForViewer(userId));
+    io.emit('user-updated', { userId, user: pubUser(u) });
   }
-  return [m.from, m.to];
-}
 
-function emitToUsers(userIds, event, data) {
-  const seen = new Set();
-  userIds.forEach(uid => {
-    if (!uid || seen.has(uid)) return;
-    seen.add(uid);
-    io.to('user_' + uid).emit(event, data);
-  });
-}
-
-async function sendPush(userId, payload) {
-  const user = knownUsers[userId];
-  if (user && Array.isArray(user.mutedChats) && payload.data && user.mutedChats.includes(payload.data.roomId)) {
-    return;
-  }
-  const subs = subscriptions[userId] || [];
-  for (const sub of subs) {
-    try { await webpush.sendNotification(sub, JSON.stringify(payload)); }
-    catch (e) {
-      if (e.statusCode === 404 || e.statusCode === 410) {
-        subscriptions[userId] = subscriptions[userId].filter(s => s.endpoint !== sub.endpoint);
-        await saveSubs(userId);
-      }
-    }
-  }
-}
-
-function broadcastRooms() { io.emit('rooms', Object.values(rooms)); }
-
-function getUserRole(room, userId) {
-  if (!room) return null;
-  if (room.roles && room.roles[userId]) return room.roles[userId];
-  if (room.createdBy === userId) return 'owner';
-  if (Array.isArray(room.admins) && room.admins.includes(userId)) return 'admin';
-  return 'member';
-}
-
-function canManage(role) { return role === 'owner' || role === 'admin'; }
-function canPin(role) { return canManage(role); }
-function canKick(role) { return canManage(role); }
-
-async function ensureContacts(a, b) {
-  if (!knownUsers[a] || !knownUsers[b]) return;
-  if (!Array.isArray(knownUsers[a].contacts)) knownUsers[a].contacts = [];
-  if (!Array.isArray(knownUsers[b].contacts)) knownUsers[b].contacts = [];
-  let changed = false;
-  if (!knownUsers[a].contacts.includes(b)) { knownUsers[a].contacts.push(b); changed = true; }
-  if (!knownUsers[b].contacts.includes(a)) { knownUsers[b].contacts.push(a); changed = true; }
-  if (changed) {
-    await Promise.all([saveUser(a), saveUser(b)]);
-    emitUserListTo(a); emitUserListTo(b);
-  }
-}
-
-io.on('connection', socket => {
-  console.log('🔌 Подключение:', socket.id);
-
-  socket.on('register', async ({ name, username, password, color, initials }) => {
+  socket.on('register', async (data = {}) => {
     try {
-      if (!name || !username) return socket.emit('auth-error', { text: 'Не хватает данных' });
-      const cleanUsername = safeUsername(username);
-      if (!/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/.test(cleanUsername)) {
-        return socket.emit('auth-error', { text: 'Username: 3-20 символов, латиница/цифры/_, начинается с буквы' });
+      const name = String(data.name || '').trim().slice(0, 30);
+      const username = String(data.username || '').trim().toLowerCase();
+      const password = String(data.password || '');
+      if (!name || !/^[a-z][a-z0-9_]{2,19}$/.test(username) || password.length < 4) {
+        return socket.emit('auth-error', { text: 'Проверьте поля' });
       }
-      if (!password || String(password).length < 4) {
-        return socket.emit('auth-error', { text: 'Пароль минимум 4 символа' });
-      }
-      const existingEntry = Object.entries(knownUsers).find(([id, u]) =>
-        u && u.username && u.username.toLowerCase() === cleanUsername.toLowerCase()
-      );
-      if (existingEntry) return socket.emit('auth-error', { text: 'Этот @username уже занят' });
+      if (db.usernames[username]) return socket.emit('auth-error', { text: 'Username уже занят' });
 
-      const userId = 'u_' + crypto.randomBytes(8).toString('hex');
-      const passwordHash = await bcrypt.hash(String(password), 10);
-      const sessionToken = crypto.randomBytes(24).toString('hex');
-      knownUsers[userId] = {
-        userId, name, username: cleanUsername, passwordHash,
-        color, initials, avatar: null,
+      const userId = uid('u');
+      const hash = await bcrypt.hash(password, 10);
+      const user = {
+        userId, name, username, password: hash,
+        color: data.color || '#5288c1',
+        initials: data.initials || name.slice(0, 2).toUpperCase(),
+        avatar: null,
         contacts: [], mutedChats: [],
         settings: { theme: 'light', accent: '#3390ec', language: 'ru' },
-        tokens: [sessionToken],
-        createdAt: Date.now()
+        createdAt: now()
       };
-      await saveUser(userId);
-
-      socket.userId = userId;
-      socket.join('user_' + userId);
-      if (!online.has(userId)) online.set(userId, new Set());
-      online.get(userId).add(socket.id);
-
-      const user = knownUsers[userId];
-      socket.emit('history', visibleMessagesFor(userId));
-      socket.emit('rooms', Object.values(rooms));
-      socket.emit('joined', {
-        userId,
-        user: sanitizeUser(user),
-        token: sessionToken,
-        isNewAccount: true
-      });
-      broadcastUserLists();
-      console.log(`[+] ${name} (@${cleanUsername}) зарегистрирован`);
+      db.users[userId] = user;
+      db.usernames[username] = userId;
+      const tok = newToken();
+      sessions.set(tok, userId);
+      save();
+      attachUser(userId, tok, true);
     } catch (e) {
-      console.error('register error:', e);
+      console.error('[register]', e);
       socket.emit('auth-error', { text: 'Ошибка регистрации' });
     }
   });
 
-  socket.on('login', async ({ username, password }) => {
+  socket.on('login', async (data = {}) => {
     try {
-      const cleanUsername = safeUsername(username);
-      const entry = Object.entries(knownUsers).find(([id, u]) =>
-        u && u.username && u.username.toLowerCase() === cleanUsername.toLowerCase()
-      );
-      if (!entry) return socket.emit('auth-error', { text: 'Аккаунт не найден' });
-      const [userId, user] = entry;
-      if (!user.passwordHash) return socket.emit('auth-error', { text: 'Аккаунт без пароля' });
-      const ok = await bcrypt.compare(String(password), user.passwordHash);
-      if (!ok) return socket.emit('auth-error', { text: 'Неверный пароль' });
-
-      const sessionToken = crypto.randomBytes(24).toString('hex');
-      if (!Array.isArray(user.tokens)) user.tokens = [];
-      user.tokens.push(sessionToken);
-      if (user.tokens.length > 10) user.tokens = user.tokens.slice(-10);
-      await saveUser(userId);
-
-      socket.userId = userId;
-      socket.join('user_' + userId);
-      if (!online.has(userId)) online.set(userId, new Set());
-      online.get(userId).add(socket.id);
-
-      socket.emit('history', visibleMessagesFor(userId));
-      socket.emit('rooms', Object.values(rooms));
-      socket.emit('joined', {
-        userId,
-        user: sanitizeUser(user),
-        token: sessionToken,
-        isNewAccount: false
-      });
-      broadcastUserLists();
-      console.log(`[+] ${user.name} (@${user.username}) вошёл`);
+      const username = String(data.username || '').trim().toLowerCase();
+      const password = String(data.password || '');
+      const userId = db.usernames[username];
+      if (!userId) return socket.emit('auth-error', { text: 'Неверный логин или пароль' });
+      const u = db.users[userId];
+      const ok = await bcrypt.compare(password, u.password);
+      if (!ok) return socket.emit('auth-error', { text: 'Неверный логин или пароль' });
+      const tok = newToken();
+      sessions.set(tok, userId);
+      attachUser(userId, tok, false);
     } catch (e) {
-      console.error('login error:', e);
+      console.error('[login]', e);
       socket.emit('auth-error', { text: 'Ошибка входа' });
     }
   });
 
-  socket.on('auto-login', async ({ userId, token }) => {
-    try {
-      if (!userId || !token) return socket.emit('auth-error', { text: 'Нужен вход' });
-      const user = knownUsers[userId];
-      if (!user) return socket.emit('auth-error', { text: 'Аккаунт не найден' });
-      if (!Array.isArray(user.tokens) || !user.tokens.includes(token)) {
-        return socket.emit('auth-error', { text: 'Сессия истекла' });
-      }
-      socket.userId = userId;
-      socket.join('user_' + userId);
-      if (!online.has(userId)) online.set(userId, new Set());
-      online.get(userId).add(socket.id);
-
-      socket.emit('history', visibleMessagesFor(userId));
-      socket.emit('rooms', Object.values(rooms));
-      socket.emit('joined', {
-        userId,
-        user: sanitizeUser(user),
-        token,
-        isNewAccount: false
-      });
-      broadcastUserLists();
-      console.log(`[+] ${user.name} (@${user.username}) auto-login`);
-    } catch (e) { socket.emit('auth-error', { text: 'Ошибка' }); }
-  });
-
-  function sanitizeUser(u) {
-    const { passwordHash, tokens, ...rest } = u;
-    return rest;
-  }
-
-  socket.on('update-profile', async ({ userId, name, color, initials, avatar }) => {
-    try {
-      if (!userId || !knownUsers[userId]) return;
-      knownUsers[userId] = {
-        ...knownUsers[userId],
-        ...(name && { name }),
-        ...(color && { color }),
-        ...(initials && { initials }),
-        ...(avatar !== undefined && { avatar })
-      };
-      await saveUser(userId);
-      broadcastUserLists();
-      io.emit('user-updated', { userId, user: knownUsers[userId] });
-    } catch (e) {}
-  });
-
-  socket.on('update-settings', async ({ userId, settings }) => {
-    try {
-      if (!userId || !knownUsers[userId]) return;
-      knownUsers[userId].settings = {
-        ...(knownUsers[userId].settings || {}),
-        ...settings
-      };
-      await saveUser(userId);
-      socket.emit('settings-updated', { settings: knownUsers[userId].settings });
-    } catch (e) {}
-  });
-
-  socket.on('change-password', async ({ userId, oldPassword, newPassword }) => {
-    try {
-      if (!userId || !knownUsers[userId]) return;
-      if (!newPassword || String(newPassword).length < 4) {
-        return socket.emit('error-msg', { text: 'Пароль минимум 4 символа' });
-      }
-      const user = knownUsers[userId];
-      if (user.passwordHash) {
-        const ok = await bcrypt.compare(String(oldPassword || ''), user.passwordHash);
-        if (!ok) return socket.emit('error-msg', { text: 'Старый пароль неверный' });
-      }
-      user.passwordHash = await bcrypt.hash(String(newPassword), 10);
-      await saveUser(userId);
-      socket.emit('toast-msg', { text: '✅ Пароль изменён' });
-    } catch (e) {}
-  });
-
-  socket.on('search-user', ({ query, byUserId }) => {
-    try {
-      const q = safeUsername(query).toLowerCase();
-      if (!q) return socket.emit('search-result', { query, results: [] });
-      const results = Object.entries(knownUsers)
-        .filter(([id, u]) => id !== byUserId && u.username && u.username.toLowerCase().includes(q))
-        .slice(0, 10)
-        .map(([id, u]) => ({
-          userId: id, name: u.name, username: u.username,
-          color: u.color, initials: u.initials, avatar: u.avatar || null,
-          online: online.has(id)
-        }));
-      socket.emit('search-result', { query, results });
-    } catch (e) {}
-  });
-
-  socket.on('add-contact', async ({ userId, contactId }) => {
-    try {
-      if (!userId || !contactId || userId === contactId) return;
-      if (!knownUsers[userId] || !knownUsers[contactId]) return;
-      await ensureContacts(userId, contactId);
-      socket.emit('contact-added', { userId: contactId });
-    } catch (e) {}
-  });
-
-  socket.on('remove-contact', async ({ userId, contactId }) => {
-    try {
-      if (!userId || !contactId) return;
-      if (knownUsers[userId] && Array.isArray(knownUsers[userId].contacts)) {
-        knownUsers[userId].contacts = knownUsers[userId].contacts.filter(x => x !== contactId);
-        await saveUser(userId);
-        emitUserListTo(userId);
-        socket.emit('contact-removed', { userId: contactId });
-      }
-    } catch (e) {}
-  });
-
-  socket.on('message', async msg => {
-    try {
-      if (!msg || !msg.id || !msg.from || !msg.to) return;
-      if (messages.some(m => m.id === msg.id)) return;
-
-      const isPublic = msg.to === 'public';
-      const isSaved = msg.to === 'saved';
-      const isRoom = typeof msg.to === 'string' && msg.to.startsWith('r_');
-      const room = isRoom ? rooms[msg.to] : null;
-
-      if (isRoom && !room) return;
-      if (room && room.type === 'channel') {
-        const role = getUserRole(room, msg.from);
-        if (!canManage(role)) return socket.emit('error-msg', { text: 'Только админы и владелец могут писать в канал' });
-      }
-      if (!isPublic && !isRoom && !isSaved) await ensureContacts(msg.from, msg.to);
-
-      let recipients;
-      if (isPublic) recipients = allUserIds();
-      else if (isSaved) recipients = [msg.from];
-      else if (isRoom) {
-        if (!Array.isArray(room.members) || !room.members.includes(msg.from)) return;
-        recipients = room.members.slice();
-      } else recipients = [msg.to, msg.from];
-
-      const ts = msg.timestamp || Date.now();
-      const full = {
-        id: msg.id, to: msg.to, from: msg.from, fromName: msg.fromName,
-        text: String(msg.text || '').slice(0, 4000),
-        file: msg.file || null,
-        replyTo: msg.replyTo || null,
-        reactions: {}, edited: false, deleted: false, pinned: false,
-        timestamp: ts,
-        time: new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        deliveredTo: [], readBy: []
-      };
-      messages.push(full);
-      if (messages.length > 10000) messages = messages.slice(-10000);
-      saveMessage(full);
-      emitToUsers(recipients, 'message', full);
-
-      recipients.forEach(uid => {
-        if (uid === msg.from) return;
-        if (!online.has(uid)) {
-          const title = isPublic ? '🌐 Общий чат'
-            : isRoom ? (room.type === 'channel' ? `📢 ${room.name}` : `👥 ${room.name}`)
-            : isSaved ? '💾 Сохранённые'
-            : `💬 ${msg.fromName}`;
-          const body = msg.file ? (msg.text ? msg.text.slice(0, 80) + ' 📎' : '📎 ' + msg.file.name) : msg.text.slice(0, 120);
-          sendPush(uid, { title: 'Pulse · ' + title, body, data: { roomId: msg.to }, tag: msg.to });
-        }
-      });
-    } catch (e) { console.error('message:', e); }
-  });
-
-  socket.on('edit-message', async ({ messageId, userId, newText }) => {
-    try {
-      const m = messages.find(x => x.id === messageId);
-      if (!m || m.from !== userId || m.deleted) return;
-      if (Date.now() - m.timestamp > 24 * 60 * 60 * 1000) return socket.emit('error-msg', { text: 'Можно редактировать в течение 24 часов' });
-      const text = String(newText || '').slice(0, 4000);
-      if (!text) return;
-      m.text = text; m.edited = true; m.editedAt = Date.now();
-      await updateMessage(m.id, { text: m.text, edited: true, editedAt: m.editedAt });
-      emitToUsers(messageRecipients(m), 'message-update', m);
-    } catch (e) {}
-  });
-
-  socket.on('delete-message', async ({ messageId, userId }) => {
-    try {
-      const m = messages.find(x => x.id === messageId);
-      if (!m || m.from !== userId || m.deleted) return;
-      m.deleted = true; m.text = ''; m.file = null; m.reactions = {};
-      await updateMessage(m.id, { deleted: true, text: '', file: null, reactions: {} });
-      emitToUsers(messageRecipients(m), 'message-update', m);
-    } catch (e) {}
-  });
-
-  socket.on('react-message', async ({ messageId, userId, emoji }) => {
-    try {
-      const m = messages.find(x => x.id === messageId);
-      if (!m || m.deleted) return;
-      const validEmojis = ['👍','❤️','😂','😮','😢','🔥'];
-      if (!validEmojis.includes(emoji)) return;
-      if (!m.reactions) m.reactions = {};
-      if (!m.reactions[emoji]) m.reactions[emoji] = [];
-      const idx = m.reactions[emoji].indexOf(userId);
-      if (idx >= 0) m.reactions[emoji].splice(idx, 1);
-      else m.reactions[emoji].push(userId);
-      if (m.reactions[emoji].length === 0) delete m.reactions[emoji];
-      await updateMessage(m.id, { reactions: m.reactions });
-      emitToUsers(messageRecipients(m), 'message-update', m);
-    } catch (e) {}
-  });
-
-  socket.on('pin-message', async ({ messageId, userId }) => {
-    try {
-      const m = messages.find(x => x.id === messageId);
-      if (!m || !m.to) return;
-      const isRoom = m.to.startsWith('r_');
-      const isPublic = m.to === 'public';
-      if (!isRoom && !isPublic) return;
-
-      let room;
-      if (isRoom) {
-        room = rooms[m.to];
-        if (!room) return;
-        const role = getUserRole(room, userId);
-        if (!canPin(role)) return socket.emit('error-msg', { text: 'Нет прав закреплять' });
-      }
-      m.pinned = !m.pinned;
-      await updateMessage(m.id, { pinned: m.pinned });
-
-      if (isRoom && room) {
-        if (!Array.isArray(room.pinnedMessages)) room.pinnedMessages = [];
-        if (m.pinned && !room.pinnedMessages.includes(m.id)) {
-          room.pinnedMessages.push(m.id);
-          if (room.pinnedMessages.length > 20) room.pinnedMessages = room.pinnedMessages.slice(-20);
-        } else if (!m.pinned) {
-          room.pinnedMessages = room.pinnedMessages.filter(x => x !== m.id);
-        }
-        await saveRoom(room.id);
-        io.emit('rooms', Object.values(rooms));
-      }
-      emitToUsers(messageRecipients(m), 'message-update', m);
-      socket.emit('toast-msg', { text: m.pinned ? '📌 Закреплено' : '📌 Откреплено' });
-    } catch (e) { console.error('pin-message:', e); }
-  });
-
-  socket.on('mute-chat', async ({ userId, chatId, muted }) => {
-    try {
-      if (!userId || !chatId || !knownUsers[userId]) return;
-      if (!Array.isArray(knownUsers[userId].mutedChats)) knownUsers[userId].mutedChats = [];
-      if (muted && !knownUsers[userId].mutedChats.includes(chatId)) {
-        knownUsers[userId].mutedChats.push(chatId);
-      } else if (!muted) {
-        knownUsers[userId].mutedChats = knownUsers[userId].mutedChats.filter(x => x !== chatId);
-      }
-      await saveUser(userId);
-      socket.emit('mutes-updated', { mutedChats: knownUsers[userId].mutedChats });
-    } catch (e) {}
-  });
-
-  socket.on('search-messages', ({ userId, query }) => {
-    try {
-      const q = String(query || '').toLowerCase().trim();
-      if (!q || q.length < 2) return socket.emit('search-messages-result', { query, results: [] });
-      const visible = visibleMessagesFor(userId);
-      const results = visible
-        .filter(m => !m.deleted && m.text && m.text.toLowerCase().includes(q))
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 50);
-      socket.emit('search-messages-result', { query, results });
-    } catch (e) {}
-  });
-
-  socket.on('delivered', async ({ userId, messageIds }) => {
-    try {
-      if (!userId || !Array.isArray(messageIds)) return;
-      const updated = [];
-      messageIds.forEach(id => {
-        const m = messages.find(x => x.id === id);
-        if (m && Array.isArray(m.deliveredTo) && !m.deliveredTo.includes(userId)) {
-          m.deliveredTo.push(userId);
-          updated.push(m);
-        }
-      });
-      if (updated.length) {
-        for (const m of updated) await updateMessage(m.id, { deliveredTo: m.deliveredTo });
-        updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
-      }
-    } catch (e) {}
-  });
-
-  socket.on('read', async ({ userId, messageIds }) => {
-    try {
-      if (!userId || !Array.isArray(messageIds)) return;
-      const updated = [];
-      messageIds.forEach(id => {
-        const m = messages.find(x => x.id === id);
-        if (m && Array.isArray(m.readBy) && !m.readBy.includes(userId)) {
-          m.readBy.push(userId);
-          if (!m.deliveredTo.includes(userId)) m.deliveredTo.push(userId);
-          updated.push(m);
-        }
-      });
-      if (updated.length) {
-        for (const m of updated) await updateMessage(m.id, { readBy: m.readBy, deliveredTo: m.deliveredTo });
-        updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
-      }
-    } catch (e) {}
-  });
-
-  socket.on('typing', ({ to, from, fromName }) => {
-    try {
-      if (!to || !from) return;
-      if (to === 'saved') return;
-      let recipients;
-      if (to === 'public') recipients = allUserIds().filter(u => u !== from);
-      else if (typeof to === 'string' && to.startsWith('r_')) recipients = ((rooms[to] && rooms[to].members) || []).filter(u => u !== from);
-      else recipients = [to];
-      emitToUsers(recipients, 'typing', { to, from, fromName });
-    } catch (e) {}
-  });
-
-  socket.on('create-room', async ({ name, type, description, creator, inviteUsernames }) => {
-    try {
-      if (!name || !type || !creator) return;
-      if (type !== 'group' && type !== 'channel') return;
-      const id = 'r_' + crypto.randomBytes(6).toString('hex');
-      const COLORS = [
-        ['#3390ec','#8774e1'], ['#ff5c8a','#ff8a5c'], ['#5cffb8','#5c9dff'],
-        ['#ffb85c','#ff5c5c'], ['#5cffd9','#5c7cff'], ['#b85cff','#ff5cb8']
-      ];
-      const c = COLORS[Math.floor(Math.random() * COLORS.length)];
-      const members = [creator];
-      const roles = { [creator]: 'owner' };
-      if (Array.isArray(inviteUsernames)) {
-        for (const un of inviteUsernames) {
-          const clean = safeUsername(un).toLowerCase();
-          if (!clean) continue;
-          const found = Object.entries(knownUsers).find(([id2, u]) =>
-            id2 !== creator && u.username && u.username.toLowerCase() === clean
-          );
-          if (found && !members.includes(found[0])) {
-            members.push(found[0]);
-            roles[found[0]] = 'member';
-            await ensureContacts(creator, found[0]);
-          }
-        }
-      }
-      rooms[id] = {
-        id, type,
-        name: name.slice(0, 60),
-        description: (description || '').slice(0, 200),
-        color: `linear-gradient(135deg,${c[0]},${c[1]})`,
-        createdBy: creator, createdAt: Date.now(),
-        members, roles,
-        pinnedMessages: []
-      };
-      await saveRoom(id);
-      broadcastRooms();
-      socket.emit('room-created', rooms[id]);
-    } catch (e) {}
-  });
-
-  socket.on('invite-to-room', async ({ roomId, byUserId, usernames }) => {
-    try {
-      const room = rooms[roomId];
-      if (!room) return;
-      const role = getUserRole(room, byUserId);
-      if (!canManage(role)) return socket.emit('error-msg', { text: 'Только админы могут приглашать' });
-      const added = [];
-      for (const un of (usernames || [])) {
-        const clean = safeUsername(un).toLowerCase();
-        if (!clean) continue;
-        const found = Object.entries(knownUsers).find(([id, u]) => u.username && u.username.toLowerCase() === clean);
-        if (found && !room.members.includes(found[0])) {
-          room.members.push(found[0]);
-          if (!room.roles) room.roles = {};
-          room.roles[found[0]] = 'member';
-          added.push('@' + found[1].username);
-          await ensureContacts(byUserId, found[0]);
-        }
-      }
-      if (added.length) {
-        await saveRoom(roomId);
-        broadcastRooms();
-        socket.emit('invited', { names: added });
-      } else {
-        socket.emit('error-msg', { text: 'Никто не добавлен' });
-      }
-    } catch (e) {}
-  });
-
-  socket.on('create-invite', async ({ roomId, byUserId }) => {
-    try {
-      const room = rooms[roomId];
-      if (!room) return;
-      const role = getUserRole(room, byUserId);
-      if (!canManage(role)) return socket.emit('error-msg', { text: 'Нет прав' });
-      const code = crypto.randomBytes(5).toString('hex');
-      await invitesCol.insertOne({ code, roomId, createdBy: byUserId, createdAt: Date.now(), uses: 0 });
-      socket.emit('invite-created', { code, roomId, link: '/join/' + code });
-    } catch (e) { console.error('create-invite:', e); }
-  });
-
-  socket.on('redeem-invite', async ({ code, userId }) => {
-    try {
-      const inv = await invitesCol.findOne({ code });
-      if (!inv) return socket.emit('invite-error', { text: 'Приглашение не найдено' });
-      const room = rooms[inv.roomId];
-      if (!room) return socket.emit('invite-error', { text: 'Комната не найдена' });
-      if (room.members.includes(userId)) {
-        socket.emit('invite-redeemed', { roomId: room.id, alreadyMember: true });
-        return;
-      }
-      room.members.push(userId);
-      if (!room.roles) room.roles = {};
-      room.roles[userId] = 'member';
-      await saveRoom(room.id);
-      await invitesCol.updateOne({ code }, { $inc: { uses: 1 } });
-      await ensureContacts(inv.createdBy, userId);
-      broadcastRooms();
-      socket.emit('invite-redeemed', { roomId: room.id, alreadyMember: false });
-      socket.emit('toast-msg', { text: '✅ Вы присоединились к "' + room.name + '"' });
-    } catch (e) { console.error('redeem-invite:', e); }
-  });
-
-  socket.on('set-role', async ({ roomId, byUserId, targetUserId, role }) => {
-    try {
-      const room = rooms[roomId];
-      if (!room) return;
-      const myRole = getUserRole(room, byUserId);
-      if (myRole !== 'owner') return socket.emit('error-msg', { text: 'Только владелец может менять роли' });
-      if (targetUserId === byUserId) return socket.emit('error-msg', { text: 'Нельзя сменить свою роль' });
-      if (!room.members.includes(targetUserId)) return;
-      if (!['admin', 'member'].includes(role)) return;
-      if (!room.roles) room.roles = {};
-      room.roles[targetUserId] = role;
-      await saveRoom(roomId);
-      broadcastRooms();
-      socket.emit('toast-msg', { text: '✅ Роль обновлена' });
-    } catch (e) {}
-  });
-
-  socket.on('kick-user', async ({ roomId, byUserId, targetUserId }) => {
-    try {
-      const room = rooms[roomId];
-      if (!room) return;
-      const myRole = getUserRole(room, byUserId);
-      if (!canKick(myRole)) return socket.emit('error-msg', { text: 'Нет прав' });
-      const targetRole = getUserRole(room, targetUserId);
-      if (targetRole === 'owner') return socket.emit('error-msg', { text: 'Нельзя исключить владельца' });
-      if (myRole === 'admin' && targetRole === 'admin') return socket.emit('error-msg', { text: 'Админ не может исключить админа' });
-      room.members = room.members.filter(x => x !== targetUserId);
-      if (room.roles) delete room.roles[targetUserId];
-      await saveRoom(roomId);
-      broadcastRooms();
-      socket.emit('toast-msg', { text: '✅ Пользователь исключён' });
-    } catch (e) {}
-  });
-
-  socket.on('join-room', async ({ roomId, userId }) => {
-    try {
-      const r = rooms[roomId];
-      if (!r || !Array.isArray(r.members) || r.members.includes(userId)) return;
-      r.members.push(userId);
-      if (!r.roles) r.roles = {};
-      r.roles[userId] = 'member';
-      await saveRoom(roomId);
-      broadcastRooms();
-    } catch (e) {}
-  });
-
-  socket.on('leave-room', async ({ roomId, userId }) => {
-    try {
-      const r = rooms[roomId];
-      if (!r) return;
-      if (getUserRole(r, userId) === 'owner') {
-        return socket.emit('error-msg', { text: 'Владелец не может покинуть — передайте права или удалите' });
-      }
-      r.members = r.members.filter(x => x !== userId);
-      if (r.roles) delete r.roles[userId];
-      if (r.members.length === 0) { delete rooms[roomId]; await deleteRoom(roomId); }
-      else await saveRoom(roomId);
-      broadcastRooms();
-    } catch (e) {}
+  socket.on('auto-login', (data = {}) => {
+    const { userId, token } = data;
+    if (!userId || !token || !db.users[userId] || sessions.get(token) !== userId) {
+      return socket.emit('auth-error', { text: 'Сессия истекла' });
+    }
+    attachUser(userId, token, false);
   });
 
   socket.on('disconnect', () => {
-    try {
-      if (socket.userId && online.has(socket.userId)) {
-        online.get(socket.userId).delete(socket.id);
-        if (online.get(socket.userId).size === 0) online.delete(socket.userId);
-        broadcastUserLists();
+    const userId = socket.data.userId;
+    if (!userId) return;
+    const set = online.get(userId);
+    if (set) {
+      set.delete(socket.id);
+      if (set.size === 0) {
+        online.delete(userId);
+        const u = db.users[userId];
+        if (u) io.emit('user-updated', { userId, user: pubUser(u) });
       }
-    } catch (e) {}
+    }
+  });
+
+  const auth = (fn) => (data) => {
+    if (!socket.data.userId) return;
+    try { fn(data || {}); } catch (e) { console.error('[handler]', e); }
+  };
+
+  socket.on('message', auth((data) => {
+    const userId = socket.data.userId;
+    const u = db.users[userId];
+    const to = String(data.to || '');
+    if (!to) return;
+    if (to.indexOf('r_') === 0) {
+      if (!inRoom(userId, to)) return;
+      if (!canWriteRoom(userId, db.rooms[to])) return socket.emit('error-msg', { text: 'Только админы могут писать' });
+    }
+    const ts = data.timestamp || now();
+    const msg = {
+      id: data.id || uid('m'),
+      from: userId, fromName: u.name,
+      to,
+      text: String(data.text || '').slice(0, 4000),
+      file: data.file || null,
+      replyTo: data.replyTo || null,
+      timestamp: ts,
+      time: fmtTime(ts),
+      deliveredTo: [], readBy: [], reactions: {},
+      edited: false, deleted: false, pinned: false
+    };
+    db.messages.push(msg);
+    save();
+
+    Object.keys(db.users).forEach(rid => {
+      if (!canSeeMessage(msg, rid)) return;
+      emitToUser(rid, 'message', msg);
+      if (rid !== userId) {
+        const me = db.users[rid];
+        const key = msg.to === 'public' ? 'public'
+          : msg.to === 'saved' ? 'saved'
+          : msg.to.indexOf('r_') === 0 ? msg.to
+          : (msg.from === rid ? msg.to : msg.from);
+        if (!me.mutedChats || me.mutedChats.indexOf(key) < 0) {
+          sendPush(rid, u.name, msg.text || 'Файл');
+        }
+      }
+    });
+  }));
+
+  socket.on('delivered', auth((data) => {
+    const userId = socket.data.userId;
+    (data.messageIds || []).forEach(id => {
+      const m = db.messages.find(x => x.id === id);
+      if (!m) return;
+      if (!m.deliveredTo) m.deliveredTo = [];
+      if (m.from !== userId && m.deliveredTo.indexOf(userId) < 0) m.deliveredTo.push(userId);
+      emitToUser(m.from, 'message-update', m);
+    });
+    save();
+  }));
+
+  socket.on('read', auth((data) => {
+    const userId = socket.data.userId;
+    (data.messageIds || []).forEach(id => {
+      const m = db.messages.find(x => x.id === id);
+      if (!m) return;
+      if (!m.readBy) m.readBy = [];
+      if (!m.deliveredTo) m.deliveredTo = [];
+      if (m.from !== userId && m.readBy.indexOf(userId) < 0) m.readBy.push(userId);
+      if (m.from !== userId && m.deliveredTo.indexOf(userId) < 0) m.deliveredTo.push(userId);
+      emitToUser(m.from, 'message-update', m);
+    });
+    save();
+  }));
+
+  socket.on('typing', auth((data) => {
+    const userId = socket.data.userId;
+    const u = db.users[userId];
+    const to = String(data.to || '');
+    if (!to || to === 'saved') return;
+    const payload = { to, from: userId, fromName: u.name };
+    if (to === 'public') socket.broadcast.emit('typing', payload);
+    else if (to.indexOf('r_') === 0) {
+      const r = db.rooms[to];
+      if (!r) return;
+      r.members.forEach(mid => { if (mid !== userId) emitToUser(mid, 'typing', payload); });
+    } else {
+      emitToUser(to, 'typing', payload);
+    }
+  }));
+
+  socket.on('react-message', auth((data) => {
+    const userId = socket.data.userId;
+    const m = db.messages.find(x => x.id === data.messageId);
+    if (!m) return;
+    const em = String(data.emoji || '').slice(0, 8);
+    if (!em) return;
+    if (!m.reactions) m.reactions = {};
+    if (!m.reactions[em]) m.reactions[em] = [];
+    const i = m.reactions[em].indexOf(userId);
+    if (i >= 0) m.reactions[em].splice(i, 1); else m.reactions[em].push(userId);
+    if (!m.reactions[em].length) delete m.reactions[em];
+    save();
+    Object.keys(db.users).forEach(rid => {
+      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    });
+  }));
+
+  socket.on('pin-message', auth((data) => {
+    const userId = socket.data.userId;
+    const m = db.messages.find(x => x.id === data.messageId);
+    if (!m) return;
+    if (m.to.indexOf('r_') === 0) {
+      const r = db.rooms[m.to];
+      const role = (r.roles && r.roles[userId]) || (r.createdBy === userId ? 'owner' : 'member');
+      if (role !== 'owner' && role !== 'admin') return;
+    }
+    m.pinned = !m.pinned;
+    save();
+    Object.keys(db.users).forEach(rid => {
+      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    });
+  }));
+
+  socket.on('edit-message', auth((data) => {
+    const userId = socket.data.userId;
+    const m = db.messages.find(x => x.id === data.messageId);
+    if (!m || m.from !== userId) return;
+    if (now() - m.timestamp > 24 * 60 * 60 * 1000) return socket.emit('error-msg', { text: 'Слишком поздно редактировать' });
+    const txt = String(data.newText || '').trim().slice(0, 4000);
+    if (!txt) return;
+    m.text = txt; m.edited = true;
+    save();
+    Object.keys(db.users).forEach(rid => {
+      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    });
+  }));
+
+  socket.on('delete-message', auth((data) => {
+    const userId = socket.data.userId;
+    const m = db.messages.find(x => x.id === data.messageId);
+    if (!m || m.from !== userId) return;
+    m.deleted = true; m.text = ''; m.file = null; m.reactions = {}; m.pinned = false;
+    save();
+    Object.keys(db.users).forEach(rid => {
+      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    });
+  }));
+
+  socket.on('create-room', auth((data) => {
+    const userId = socket.data.userId;
+    const name = String(data.name || '').trim().slice(0, 60);
+    if (!name) return;
+    const type = data.type === 'channel' ? 'channel' : 'group';
+    const rid = uid('r');
+    const room = {
+      id: rid, name, type,
+      description: String(data.description || '').slice(0, 200),
+      members: [userId],
+      roles: { [userId]: 'owner' },
+      createdBy: userId,
+      color: '#5288c1'
+    };
+    if (Array.isArray(data.inviteUsernames)) {
+      data.inviteUsernames.forEach(un => {
+        const clean = String(un || '').replace(/^@/, '').trim().toLowerCase();
+        const iid = db.usernames[clean];
+        if (iid && iid !== userId && room.members.indexOf(iid) < 0) {
+          room.members.push(iid);
+          room.roles[iid] = 'member';
+          emitToUser(iid, 'invited', { names: [name] });
+        }
+      });
+    }
+    db.rooms[rid] = room;
+    save();
+    socket.emit('room-created', roomView(room));
+    broadcastRoomsToAll();
+    broadcastUsersToAll();
+  }));
+
+  socket.on('invite-to-room', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
+    if (myRole !== 'owner' && myRole !== 'admin') return;
+    const added = [];
+    (data.usernames || []).forEach(un => {
+      const clean = String(un || '').replace(/^@/, '').trim().toLowerCase();
+      const iid = db.usernames[clean];
+      if (iid && r.members.indexOf(iid) < 0) {
+        r.members.push(iid);
+        r.roles[iid] = 'member';
+        added.push(db.users[iid].name);
+        emitToUser(iid, 'invited', { names: [r.name] });
+      }
+    });
+    save();
+    socket.emit('toast-msg', { text: added.length ? 'Приглашены: ' + added.join(', ') : 'Никого не добавили' });
+    broadcastRoomsToAll();
+    broadcastUsersToAll();
+  }));
+
+  socket.on('join-room', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    if (r.type === 'channel') return;
+    if (r.members.indexOf(userId) < 0) {
+      r.members.push(userId);
+      r.roles[userId] = 'member';
+      save();
+      broadcastRoomsToAll();
+      broadcastUsersToAll();
+    }
+  }));
+
+  socket.on('leave-room', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    const i = r.members.indexOf(userId);
+    if (i >= 0) r.members.splice(i, 1);
+    delete r.roles[userId];
+    if (!r.members.length) delete db.rooms[r.id];
+    else if (r.createdBy === userId) {
+      r.createdBy = r.members[0];
+      r.roles[r.createdBy] = 'owner';
+    }
+    save();
+    broadcastRoomsToAll();
+    broadcastUsersToAll();
+  }));
+
+  socket.on('kick-user', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
+    if (myRole !== 'owner' && myRole !== 'admin') return;
+    const target = data.targetUserId;
+    if (!target || target === userId) return;
+    const tr = r.roles[target] || 'member';
+    if (tr === 'owner') return;
+    if (myRole === 'admin' && tr === 'admin') return;
+    const i = r.members.indexOf(target);
+    if (i >= 0) r.members.splice(i, 1);
+    delete r.roles[target];
+    save();
+    broadcastRoomsToAll();
+    broadcastUsersToAll();
+  }));
+
+  socket.on('set-role', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    if (r.roles[userId] !== 'owner' && r.createdBy !== userId) return;
+    const target = data.targetUserId;
+    if (!target || target === userId) return;
+    if (r.members.indexOf(target) < 0) return;
+    r.roles[target] = data.role === 'admin' ? 'admin' : 'member';
+    save();
+    broadcastRoomsToAll();
+  }));
+
+  socket.on('add-contact', auth((data) => {
+    const userId = socket.data.userId;
+    const cid = data.contactId;
+    if (!db.users[cid] || cid === userId) return;
+    const u = db.users[userId];
+    if (!u.contacts) u.contacts = [];
+    if (u.contacts.indexOf(cid) < 0) u.contacts.push(cid);
+    save();
+    socket.emit('contact-added', { userId: cid });
+    socket.emit('users', usersForViewer(userId));
+  }));
+
+  socket.on('remove-contact', auth((data) => {
+    const userId = socket.data.userId;
+    const cid = data.contactId;
+    const u = db.users[userId];
+    if (!u.contacts) u.contacts = [];
+    const i = u.contacts.indexOf(cid);
+    if (i >= 0) u.contacts.splice(i, 1);
+    save();
+    socket.emit('contact-removed', { userId: cid });
+    socket.emit('users', usersForViewer(userId));
+  }));
+
+  socket.on('search-user', auth((data) => {
+    const userId = socket.data.userId;
+    const q = String(data.query || '').replace(/^@/, '').toLowerCase();
+    if (!q) return socket.emit('search-result', { results: [] });
+    const out = [];
+    Object.values(db.users).forEach(u => {
+      if (u.userId === userId) return;
+      if (u.username.indexOf(q) >= 0 || u.name.toLowerCase().indexOf(q) >= 0) out.push(pubUser(u));
+    });
+    out.sort((a, b) => a.username.indexOf(q) - b.username.indexOf(q));
+    socket.emit('search-result', { results: out.slice(0, 30) });
+  }));
+
+  socket.on('search-messages', auth((data) => {
+    const userId = socket.data.userId;
+    const q = String(data.query || '').toLowerCase().trim();
+    if (q.length < 2) return socket.emit('search-messages-result', { query: q, results: [] });
+    const results = db.messages
+      .filter(m => !m.deleted && canSeeMessage(m, userId) && (m.text || '').toLowerCase().indexOf(q) >= 0)
+      .slice(-100);
+    socket.emit('search-messages-result', { query: q, results });
+  }));
+
+  socket.on('create-invite', auth((data) => {
+    const userId = socket.data.userId;
+    const r = db.rooms[data.roomId];
+    if (!r) return;
+    const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
+    if (myRole !== 'owner' && myRole !== 'admin') return;
+    const code = crypto.randomBytes(6).toString('hex');
+    db.invites[code] = { roomId: r.id, createdBy: userId, createdAt: now() };
+    save();
+    socket.emit('invite-created', { link: '/join/' + code });
+  }));
+
+  socket.on('redeem-invite', auth((data) => {
+    const userId = socket.data.userId;
+    const inv = db.invites[String(data.code || '')];
+    if (!inv) return socket.emit('invite-error', { text: 'Ссылка недействительна' });
+    const r = db.rooms[inv.roomId];
+    if (!r) return socket.emit('invite-error', { text: 'Комната не найдена' });
+    const already = r.members.indexOf(userId) >= 0;
+    if (!already) {
+      r.members.push(userId);
+      r.roles[userId] = 'member';
+      save();
+      broadcastRoomsToAll();
+      broadcastUsersToAll();
+    }
+    socket.emit('invite-redeemed', { roomId: r.id, alreadyMember: already });
+  }));
+
+  socket.on('mute-chat', auth((data) => {
+    const userId = socket.data.userId;
+    const u = db.users[userId];
+    if (!u.mutedChats) u.mutedChats = [];
+    const cid = String(data.chatId || '');
+    if (!cid) return;
+    const i = u.mutedChats.indexOf(cid);
+    if (data.muted && i < 0) u.mutedChats.push(cid);
+    else if (!data.muted && i >= 0) u.mutedChats.splice(i, 1);
+    save();
+    socket.emit('mutes-updated', { mutedChats: u.mutedChats });
+  }));
+
+  socket.on('update-settings', auth((data) => {
+    const userId = socket.data.userId;
+    const u = db.users[userId];
+    if (data.settings && typeof data.settings === 'object') {
+      u.settings = Object.assign({}, u.settings, data.settings);
+      save();
+    }
+  }));
+
+  socket.on('update-profile', auth((data) => {
+    const userId = socket.data.userId;
+    const u = db.users[userId];
+    if (typeof data.name === 'string' && data.name.trim()) {
+      u.name = data.name.trim().slice(0, 30);
+      u.initials = u.name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2)
+        || u.name.slice(0, 2).toUpperCase();
+    }
+    if (data.color) u.color = data.color;
+    if (data.initials) u.initials = data.initials;
+    if (data.avatar === null || typeof data.avatar === 'string') u.avatar = data.avatar;
+    save();
+    io.emit('user-updated', { userId, user: pubUser(u) });
+  }));
+
+  socket.on('change-password', async (data = {}) => {
+    const userId = socket.data.userId;
+    if (!userId) return;
+    const u = db.users[userId];
+    const ok = await bcrypt.compare(String(data.oldPassword || ''), u.password);
+    if (!ok) return socket.emit('toast-msg', { text: 'Неверный старый пароль' });
+    const np = String(data.newPassword || '');
+    if (np.length < 4) return socket.emit('toast-msg', { text: 'Минимум 4 символа' });
+    u.password = await bcrypt.hash(np, 10);
+    save();
+    socket.emit('toast-msg', { text: 'Пароль изменён' });
   });
 });
 
-process.on('uncaughtException', err => console.error('❌ uncaughtException:', err));
-process.on('unhandledRejection', err => console.error('❌ unhandledRejection:', err));
-
-const PORT = process.env.PORT || 3000;
-
-(async function start() {
-  try {
-    await initDB();
-    await initVapid();
-    await loadData();
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`\n🚀 Pulse запущен на порту ${PORT}\n`);
-    });
-  } catch (e) {
-    console.error('❌ Критическая ошибка:', e);
-    process.exit(1);
-  }
-})();
-
-process.on('SIGTERM', async () => {
-  try { await mongoClient.close(); } catch (e) {}
-  server.close(() => process.exit(0));
-});
+server.listen(PORT, () => console.log('Pulse listening on ' + PORT));
