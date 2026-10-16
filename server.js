@@ -24,7 +24,7 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
 }
 
 // ---------- DB ----------
-let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {} };
+let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {}, hiddenChats: {} };
 try {
   if (fs.existsSync(DATA_FILE)) {
     const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -133,12 +133,23 @@ function canSeeMessage(m, userId) {
 }
 
 function msgsFor(userId) {
-  return db.messages.filter(m => canSeeMessage(m, userId));
+  const hidden = db.hiddenChats[userId] || {};
+  return db.messages.filter(m => !hidden[m.id] && canSeeMessage(m, userId));
+}
+
+function isBlockedAny(a, b) {
+  // взаимная блокировка: если хоть один заблокировал другого — контакт невозможен
+  const ua = db.users[a], ub = db.users[b];
+  if (!ua || !ub) return false;
+  const ba = Array.isArray(ua.blocked) ? ua.blocked : [];
+  const bb = Array.isArray(ub.blocked) ? ub.blocked : [];
+  return ba.indexOf(b) >= 0 || bb.indexOf(a) >= 0;
 }
 
 function usersForViewer(userId) {
   const ids = new Set();
   const me = db.users[userId];
+  const myBlocked = (me && Array.isArray(me.blocked)) ? me.blocked : [];
   if (me && Array.isArray(me.contacts)) me.contacts.forEach(id => ids.add(id));
 
   db.messages.forEach(m => {
@@ -152,6 +163,7 @@ function usersForViewer(userId) {
     if (r.members && r.members.indexOf(userId) >= 0) r.members.forEach(id => ids.add(id));
   });
   ids.delete(userId);
+  myBlocked.forEach(id => ids.delete(id));
 
   const out = [];
   ids.forEach(id => { if (db.users[id]) out.push(pubUser(db.users[id])); });
@@ -309,6 +321,13 @@ io.on('connection', (socket) => {
     if (to.indexOf('r_') === 0) {
       if (!inRoom(userId, to)) return;
       if (!canWriteRoom(userId, db.rooms[to])) return socket.emit('error-msg', { text: 'Только админы могут писать' });
+    } else if (to !== 'public' && to !== 'saved') {
+      // личный чат: проверка блокировки (в любую сторону)
+      if (!db.users[to]) return;
+      if (isBlockedAny(userId, to)) {
+        const byMe = !!(u.blocked && u.blocked.indexOf(to) >= 0);
+        return socket.emit('error-msg', { text: byMe ? 'Пользователь заблокирован. Разблокируйте его.' : 'Вы заблокированы этим пользователем' });
+      }
     }
     const ts = data.timestamp || now();
     const msg = {
@@ -328,6 +347,11 @@ io.on('connection', (socket) => {
 
     Object.keys(db.users).forEach(rid => {
       if (!canSeeMessage(msg, rid)) return;
+      // блокировка скрывает личные сообщения от обеих сторон (в т.ч. уже отправленные)
+      if (msg.to !== 'public' && msg.to !== 'saved' && String(msg.to).indexOf('r_') !== 0) {
+        const other = msg.from === rid ? msg.to : msg.from;
+        if (isBlockedAny(rid, other)) return;
+      }
       emitToUser(rid, 'message', msg);
       if (rid !== userId) {
         const me = db.users[rid];
@@ -380,6 +404,7 @@ io.on('connection', (socket) => {
       if (!r) return;
       r.members.forEach(mid => { if (mid !== userId) emitToUser(mid, 'typing', payload); });
     } else {
+      if (isBlockedAny(userId, to)) return;
       emitToUser(to, 'typing', payload);
     }
   }));
@@ -587,11 +612,16 @@ io.on('connection', (socket) => {
 
   socket.on('search-user', auth((data) => {
     const userId = socket.data.userId;
+    const meU = db.users[userId];
+    const myBlocked = (meU && Array.isArray(meU.blocked)) ? meU.blocked : [];
     const q = String(data.query || '').replace(/^@/, '').toLowerCase();
     if (!q) return socket.emit('search-result', { results: [] });
     const out = [];
     Object.values(db.users).forEach(u => {
       if (u.userId === userId) return;
+      if (myBlocked.indexOf(u.userId) >= 0) return;               // я заблокировал — не ищу
+      const other = db.users[u.userId];
+      if (Array.isArray(other.blocked) && other.blocked.indexOf(userId) >= 0) return; // он заблокировал меня — невидим
       if (u.username.indexOf(q) >= 0 || u.name.toLowerCase().indexOf(q) >= 0) out.push(pubUser(u));
     });
     out.sort((a, b) => a.username.indexOf(q) - b.username.indexOf(q));
@@ -648,6 +678,85 @@ io.on('connection', (socket) => {
     else if (!data.muted && i >= 0) u.mutedChats.splice(i, 1);
     save();
     socket.emit('mutes-updated', { mutedChats: u.mutedChats });
+  }));
+
+  // ---------- Блокировка пользователя ----------
+  socket.on('block-user', auth((data) => {
+    const userId = socket.data.userId;
+    const target = String(data.targetUserId || '');
+    if (!target || target === userId || !db.users[target]) return;
+    const u = db.users[userId];
+    if (!Array.isArray(u.blocked)) u.blocked = [];
+    if (u.blocked.indexOf(target) < 0) u.blocked.push(target);
+    // убрать из контактов в обе стороны
+    if (Array.isArray(u.contacts)) {
+      const ci = u.contacts.indexOf(target);
+      if (ci >= 0) u.contacts.splice(ci, 1);
+    }
+    const t2 = db.users[target];
+    if (Array.isArray(t2.contacts)) {
+      const ti = t2.contacts.indexOf(userId);
+      if (ti >= 0) t2.contacts.splice(ti, 1);
+    }
+    save();
+    socket.emit('blocked-updated', { blocked: u.blocked.slice() });
+    socket.emit('users', usersForViewer(userId));
+    socket.emit('history', msgsFor(userId));
+    broadcastUsersToAll();
+    emitToUser(target, 'users', usersForViewer(target));
+    socket.emit('toast-msg', { text: 'Пользователь заблокирован' });
+  }));
+
+  socket.on('unblock-user', auth((data) => {
+    const userId = socket.data.userId;
+    const target = String(data.targetUserId || '');
+    const u = db.users[userId];
+    if (!Array.isArray(u.blocked)) u.blocked = [];
+    const i = u.blocked.indexOf(target);
+    if (i >= 0) u.blocked.splice(i, 1);
+    save();
+    socket.emit('blocked-updated', { blocked: u.blocked.slice() });
+    socket.emit('users', usersForViewer(userId));
+    socket.emit('history', msgsFor(userId));
+    broadcastUsersToAll();
+    socket.emit('toast-msg', { text: 'Пользователь разблокирован' });
+  }));
+
+  // ---------- Удаление чата (только у себя) ----------
+  socket.on('delete-chat', auth((data) => {
+    const userId = socket.data.userId;
+    const chatId = String(data.chatId || '');
+    if (!chatId) return;
+    if (!db.hiddenChats[userId]) db.hiddenChats[userId] = {};
+    let count = 0;
+    db.messages.forEach(m => {
+      if (!canSeeMessage(m, userId)) return;
+      let key;
+      if (m.to === 'public') key = 'public';
+      else if (m.to === 'saved') key = 'saved';
+      else if (String(m.to).indexOf('r_') === 0) key = m.to;
+      else key = (m.from === userId ? m.to : m.from);
+      if (key === chatId) { db.hiddenChats[userId][m.id] = true; count++; }
+    });
+    // если это комната — выйти из неё (чат исчезнет из списка полностью)
+    if (chatId.indexOf('r_') === 0) {
+      const r = db.rooms[chatId];
+      if (r) {
+        const mi = r.members.indexOf(userId);
+        if (mi >= 0) {
+          r.members.splice(mi, 1);
+          delete r.roles[userId];
+          if (!r.members.length) delete db.rooms[r.id];
+          else if (r.createdBy === userId) { r.createdBy = r.members[0]; r.roles[r.createdBy] = 'owner'; }
+          broadcastRoomsToAll();
+          broadcastUsersToAll();
+        }
+      }
+    }
+    save();
+    socket.emit('chat-deleted', { chatId });
+    socket.emit('history', msgsFor(userId));
+    socket.emit('toast-msg', { text: 'Чат удалён' });
   }));
 
   socket.on('update-settings', auth((data) => {
