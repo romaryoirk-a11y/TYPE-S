@@ -7,10 +7,11 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const { Server } = require('socket.io');
+const { MongoClient } = require('mongodb');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'db.json');
+const DATA_FILE = path.join(DATA_DIR, 'db.json'); // старая JSON-БД — только для одноразового переноса в MongoDB
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
@@ -23,27 +24,90 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
   } catch (e) { console.warn('[push] disabled:', e.message); }
 }
 
-// ---------- DB ----------
-let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {}, hiddenChats: {}, encKeys: {} };
-try {
-  if (fs.existsSync(DATA_FILE)) {
-    const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    db = Object.assign(db, raw);
-  }
-} catch (e) { console.error('[db] load failed:', e.message); }
+// ---------- MongoDB ----------
+// MONGODB_URI — внешняя база (MongoDB Atlas / локальный mongod).
+// Если не задана — автоматически поднимается встроенная in-memory MongoDB
+// (mongodb-memory-server), чтобы проект работал «из коробки» без установки Mongo.
+const MONGODB_URI = process.env.MONGODB_URI || '';
+let client = null;
+let col = {}; // users, usernames, messages, rooms, invites, subs, hiddenChats, encKeys, sessions
 
-let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { fs.writeFileSync(DATA_FILE, JSON.stringify(db)); }
-    catch (e) { console.error('[db] save failed:', e.message); }
-  }, 200);
+async function startMongo() {
+  let uri = MONGODB_URI;
+  if (!uri) {
+    const { MongoMemoryServer } = require('mongodb-memory-server');
+    const mem = await MongoMemoryServer.create({ instance: { dbName: 'pulse' } });
+    uri = mem.getUri();
+    console.log('[mongo] запущена встроенная in-memory MongoDB:', uri);
+  } else {
+    console.log('[mongo] подключение к внешней MongoDB...');
+  }
+  client = new MongoClient(uri);
+  await client.connect();
+  const dbo = client.db();
+  col = {
+    users: dbo.collection('users'),
+    usernames: dbo.collection('usernames'),
+    messages: dbo.collection('messages'),
+    rooms: dbo.collection('rooms'),
+    invites: dbo.collection('invites'),
+    subs: dbo.collection('subs'),
+    hiddenChats: dbo.collection('hiddenChats'),
+    encKeys: dbo.collection('encKeys'),
+    sessions: dbo.collection('sessions')
+  };
+  await Promise.all([
+    col.users.createIndex({ userId: 1 }, { unique: true }),
+    col.usernames.createIndex({ username: 1 }, { unique: true }),
+    col.messages.createIndex({ id: 1 }, { unique: true }),
+    col.messages.createIndex({ to: 1, timestamp: 1 }),
+    col.rooms.createIndex({ id: 1 }, { unique: true }),
+    col.invites.createIndex({ code: 1 }, { unique: true }),
+    col.subs.createIndex({ userId: 1 }, { unique: true }),
+    col.hiddenChats.createIndex({ userId: 1 }, { unique: true }),
+    col.encKeys.createIndex({ chatId: 1 }, { unique: true }),
+    col.sessions.createIndex({ token: 1 }, { unique: true })
+  ]);
+  await migrateFromJson();
+  console.log('[mongo] база готова:', dbo.databaseName);
+}
+
+// Одноразовый перенос данных из старого data/db.json (если он непустой и Mongo ещё пуста)
+async function migrateFromJson() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const hasData = Object.keys(raw.users || {}).length || (raw.messages || []).length || Object.keys(raw.rooms || {}).length;
+    if (!hasData) return;
+    const existing = await col.users.countDocuments();
+    if (existing > 0) { console.log('[migrate] MongoDB уже содержит данные — перенос пропущен'); return; }
+    const ops = [];
+    Object.values(raw.users || {}).forEach(u => ops.push(col.users.replaceOne({ userId: u.userId }, { userId: u.userId, ...u }, { upsert: true })));
+    Object.entries(raw.usernames || {}).forEach(([username, userId]) => ops.push(col.usernames.replaceOne({ username }, { username, userId }, { upsert: true })));
+    (raw.messages || []).forEach(m => ops.push(col.messages.replaceOne({ id: m.id }, { ...m }, { upsert: true })));
+    Object.values(raw.rooms || {}).forEach(r => ops.push(col.rooms.replaceOne({ id: r.id }, { ...r }, { upsert: true })));
+    Object.entries(raw.invites || {}).forEach(([code, v]) => ops.push(col.invites.replaceOne({ code }, { code, ...v }, { upsert: true })));
+    Object.entries(raw.subs || {}).forEach(([userId, subscription]) => ops.push(col.subs.replaceOne({ userId }, { userId, subscription }, { upsert: true })));
+    Object.entries(raw.hiddenChats || {}).forEach(([userId, ids]) => ops.push(col.hiddenChats.replaceOne({ userId }, { userId, ids }, { upsert: true })));
+    Object.entries(raw.encKeys || {}).forEach(([chatId, rec]) => ops.push(col.encKeys.replaceOne({ chatId }, { chatId, ...rec }, { upsert: true })));
+    await Promise.all(ops.map(p => p.catch(e => console.error('[migrate] op failed:', e.message))));
+    const backup = DATA_FILE + '.migrated.bak';
+    fs.renameSync(DATA_FILE, backup);
+    console.log('[migrate] данные перенесены в MongoDB, старый файл сохранён как', path.basename(backup));
+  } catch (e) { console.error('[migrate] failed:', e.message); }
 }
 
 // ---------- Sessions / presence ----------
-const sessions = new Map();   // token -> userId
-const online = new Map();     // userId -> Set<socketId>
+const online = new Map();     // userId -> Set<socketId>  (в реальном времени, не хранится в БД)
+
+async function sessionGet(token) {
+  if (!token) return null;
+  const s = await col.sessions.findOne({ token });
+  return s ? s.userId : null;
+}
+async function sessionSet(token, userId) {
+  await col.sessions.updateOne({ token }, { $set: { token, userId, createdAt: Date.now() } }, { upsert: true });
+}
 
 // ---------- Express ----------
 const app = express();
@@ -65,38 +129,57 @@ app.post('/upload', upload.single('file'), (req, res) => {
   });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
+app.get('/health', (_req, res) => res.json({ ok: true, time: Date.now(), db: 'mongodb' }));
 
-app.get('/stats', (_req, res) => {
-  let reactions = 0, files = 0;
-  db.messages.forEach(m => {
-    if (m.deleted) return;
-    if (m.file) files++;
-    if (m.reactions) Object.values(m.reactions).forEach(a => reactions += a.length);
-  });
-  res.json({
-    totalUsers: Object.keys(db.users).length,
-    online: online.size,
-    totalMessages: db.messages.filter(m => !m.deleted).length,
-    totalRooms: Object.keys(db.rooms).length,
-    totalFileMsgs: files,
-    totalReactions: reactions
-  });
+app.get('/stats', async (_req, res) => {
+  try {
+    const [totalUsers, totalMessages, totalRooms] = await Promise.all([
+      col.users.countDocuments(),
+      col.messages.countDocuments({ deleted: { $ne: true } }),
+      col.rooms.countDocuments()
+    ]);
+    const agg = await col.messages.aggregate([
+      { $match: { deleted: { $ne: true } } },
+      {
+        $project: {
+          file: { $cond: [{ $ifNull: ['$file', false] }, 1, 0] },
+          reactions: {
+            $reduce: {
+              input: { $ifNull: [{ $objectToArray: { $ifNull: ['$reactions', {}] } }, []] },
+              initialValue: 0,
+              in: { $add: ['$$value', { $size: '$$this.v' }] }
+            }
+          }
+        }
+      },
+      { $group: { _id: null, files: { $sum: '$file' }, reactions: { $sum: '$reactions' } } }
+    ]).toArray();
+    res.json({
+      totalUsers,
+      online: online.size,
+      totalMessages,
+      totalRooms,
+      totalFileMsgs: agg[0] ? agg[0].files : 0,
+      totalReactions: agg[0] ? agg[0].reactions : 0
+    });
+  } catch (e) {
+    console.error('[stats]', e);
+    res.status(500).json({ error: 'stats failed' });
+  }
 });
 
 app.get('/vapid-public-key', (_req, res) => res.json({ key: VAPID_PUBLIC || '' }));
 
-app.post('/subscribe', (req, res) => {
+app.post('/subscribe', async (req, res) => {
   const { userId, subscription } = req.body || {};
   if (!userId || !subscription) return res.status(400).json({ error: 'bad request' });
-  db.subs[userId] = subscription;
-  save();
+  await col.subs.updateOne({ userId }, { $set: { userId, subscription } }, { upsert: true });
   res.json({ ok: true });
 });
 
-app.post('/unsubscribe', (req, res) => {
+app.post('/unsubscribe', async (req, res) => {
   const { userId } = req.body || {};
-  if (userId) { delete db.subs[userId]; save(); }
+  if (userId) await col.subs.deleteOne({ userId });
   res.json({ ok: true });
 });
 
@@ -122,51 +205,98 @@ function pubUser(u) {
   };
 }
 
-function canSeeMessage(m, userId) {
+// Ключи документов (для быстрых map-lookup'ов поверх Mongo)
+const docKey = (d) => d._id || d.userId || d.id || d.roomId || d.chatId || d.code;
+const indexById = (docs) => { const m = {}; docs.forEach(d => { m[docKey(d)] = d; }); return m; };
+
+async function getUser(userId) { return col.users.findOne({ userId }); }
+async function getAllUsers() { return col.users.find({}).toArray(); }
+async function getUserIdByUsername(username) {
+  const u = await col.usernames.findOne({ username });
+  return u ? u.userId : null;
+}
+async function getRoom(roomId) { return roomId ? col.rooms.findOne({ id: roomId }) : null; }
+async function getAllRooms() { return col.rooms.find({}).toArray(); }
+async function getMessage(msgId) { return msgId ? col.messages.findOne({ id: msgId }) : null; }
+async function getHiddenMap(userId) {
+  const h = await col.hiddenChats.findOne({ userId });
+  return h ? (h.ids || {}) : {};
+}
+async function getEncKey(chatId) { return col.encKeys.findOne({ chatId }); }
+async function getSub(userId) {
+  const s = await col.subs.findOne({ userId });
+  return s ? s.subscription : null;
+}
+
+// Установка/обновление комнаты с корректной сериализацией ролей (Mongo не принимает "$" и "." в ключах)
+async function putRoom(room) {
+  const rolesArr = Object.entries(room.roles || {}).map(([userId, role]) => ({ userId, role }));
+  const doc = {
+    id: room.id, name: room.name, type: room.type, description: room.description || '',
+    members: room.members.slice(), rolesArr, createdBy: room.createdBy, color: room.color || '#5288c1'
+  };
+  await col.rooms.replaceOne({ id: room.id }, doc, { upsert: true });
+}
+function hydrateRoom(doc) {
+  if (!doc) return null;
+  const roles = {};
+  (doc.rolesArr || []).forEach(r => { roles[r.userId] = r.role; });
+  return { ...doc, roles, _id: undefined };
+}
+
+function canSeeMessage(m, userId, roomsById) {
   if (m.to === 'public') return true;
   if (m.to === 'saved') return m.from === userId;
   if (typeof m.to === 'string' && m.to.indexOf('r_') === 0) {
-    const r = db.rooms[m.to];
+    const r = roomsById[m.to];
     return !!(r && r.members && r.members.indexOf(userId) >= 0);
   }
   return m.from === userId || m.to === userId;
 }
 
-function msgsFor(userId) {
-  const hidden = db.hiddenChats[userId] || {};
-  return db.messages.filter(m => !hidden[m.id] && canSeeMessage(m, userId));
+async function msgsFor(userId) {
+  const [messages, roomsArr, hidden] = await Promise.all([
+    col.messages.find({}).sort({ timestamp: 1 }).toArray(),
+    getAllRooms(),
+    getHiddenMap(userId)
+  ]);
+  const roomsById = indexById(roomsArr.map(hydrateRoom));
+  return messages.filter(m => !hidden[m.id] && canSeeMessage(m, userId, roomsById));
 }
 
-function isBlockedAny(a, b) {
+function isBlockedAny(a, b, usersById) {
   // взаимная блокировка: если хоть один заблокировал другого — контакт невозможен
-  const ua = db.users[a], ub = db.users[b];
+  const ua = usersById[a], ub = usersById[b];
   if (!ua || !ub) return false;
   const ba = Array.isArray(ua.blocked) ? ua.blocked : [];
   const bb = Array.isArray(ub.blocked) ? ub.blocked : [];
   return ba.indexOf(b) >= 0 || bb.indexOf(a) >= 0;
 }
 
-function usersForViewer(userId) {
-  const ids = new Set();
-  const me = db.users[userId];
+async function usersForViewer(userId) {
+  const [users, messages, roomsArr] = await Promise.all([getAllUsers(), col.messages.find({}).toArray(), getAllRooms()]);
+  const usersById = indexById(users);
+  const roomsById = indexById(roomsArr.map(hydrateRoom));
+  const me = usersById[userId];
   const myBlocked = (me && Array.isArray(me.blocked)) ? me.blocked : [];
+  const ids = new Set();
   if (me && Array.isArray(me.contacts)) me.contacts.forEach(id => ids.add(id));
 
-  db.messages.forEach(m => {
+  messages.forEach(m => {
     if (m.from === userId) {
       if (m.to !== 'public' && m.to !== 'saved' && String(m.to).indexOf('r_') !== 0) ids.add(m.to);
-    } else if (canSeeMessage(m, userId)) {
+    } else if (canSeeMessage(m, userId, roomsById)) {
       ids.add(m.from);
     }
   });
-  Object.values(db.rooms).forEach(r => {
+  Object.values(roomsById).forEach(r => {
     if (r.members && r.members.indexOf(userId) >= 0) r.members.forEach(id => ids.add(id));
   });
   ids.delete(userId);
   myBlocked.forEach(id => ids.delete(id));
 
   const out = [];
-  ids.forEach(id => { if (db.users[id]) out.push(pubUser(db.users[id])); });
+  ids.forEach(id => { if (usersById[id]) out.push(pubUser(usersById[id])); });
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
@@ -181,7 +311,10 @@ function roomView(r) {
     color: r.color || '#5288c1'
   };
 }
-const roomsList = () => Object.values(db.rooms).map(roomView);
+async function roomsList() {
+  const rooms = await getAllRooms();
+  return rooms.map(hydrateRoom).map(roomView);
+}
 
 function emitToUser(userId, event, data) {
   const set = online.get(userId);
@@ -189,13 +322,13 @@ function emitToUser(userId, event, data) {
   set.forEach(sid => io.to(sid).emit(event, data));
 }
 
-function broadcastRoomsToAll() {
-  const list = roomsList();
+async function broadcastRoomsToAll() {
+  const list = await roomsList();
   io.sockets.sockets.forEach(s => { if (s.data.userId) s.emit('rooms', list); });
 }
-function broadcastUsersToAll() {
-  io.sockets.sockets.forEach(s => {
-    if (s.data.userId) s.emit('users', usersForViewer(s.data.userId));
+async function broadcastUsersToAll() {
+  io.sockets.sockets.forEach(async s => {
+    if (s.data.userId) s.emit('users', await usersForViewer(s.data.userId));
   });
 }
 
@@ -205,33 +338,33 @@ function canWriteRoom(userId, room) {
   if (room.type === 'channel') return role === 'owner' || role === 'admin';
   return true;
 }
-function inRoom(userId, roomId) {
-  const r = db.rooms[roomId];
-  return !!(r && r.members && r.members.indexOf(userId) >= 0);
+function inRoom(userId, room) {
+  return !!(room && room.members && room.members.indexOf(userId) >= 0);
 }
 
-function sendPush(userId, title, body) {
-  if (!webpush || !db.subs[userId]) return;
-  webpush.sendNotification(db.subs[userId], JSON.stringify({ title, body }))
-    .catch(() => { delete db.subs[userId]; save(); });
+async function sendPush(userId, title, body) {
+  if (!webpush) return;
+  const sub = await getSub(userId);
+  if (!sub) return;
+  webpush.sendNotification(sub, JSON.stringify({ title, body }))
+    .catch(() => { col.subs.deleteOne({ userId }).catch(() => {}); });
 }
 
 // ---------- Socket.IO ----------
 io.on('connection', (socket) => {
   socket.data.userId = null;
 
-  function attachUser(userId, token, isNewAccount) {
+  async function attachUser(userId, token, isNewAccount) {
     socket.data.userId = userId;
     if (!online.has(userId)) online.set(userId, new Set());
     online.get(userId).add(socket.id);
-    const u = db.users[userId];
-    socket.emit('joined', {
-      user: Object.assign({}, u, { password: undefined }),
-      userId, token, isNewAccount: !!isNewAccount
-    });
-    socket.emit('history', msgsFor(userId));
-    socket.emit('rooms', roomsList());
-    socket.emit('users', usersForViewer(userId));
+    const u = await getUser(userId);
+    if (!u) return;
+    const safeUser = Object.assign({}, u, { password: undefined });
+    socket.emit('joined', { user: safeUser, userId, token, isNewAccount: !!isNewAccount });
+    socket.emit('history', await msgsFor(userId));
+    socket.emit('rooms', await roomsList());
+    socket.emit('users', await usersForViewer(userId));
     io.emit('user-updated', { userId, user: pubUser(u) });
   }
 
@@ -243,7 +376,7 @@ io.on('connection', (socket) => {
       if (!name || !/^[a-z][a-z0-9_]{2,19}$/.test(username) || password.length < 4) {
         return socket.emit('auth-error', { text: 'Проверьте поля' });
       }
-      if (db.usernames[username]) return socket.emit('auth-error', { text: 'Username уже занят' });
+      if (await getUserIdByUsername(username)) return socket.emit('auth-error', { text: 'Username уже занят' });
 
       const userId = uid('u');
       const hash = await bcrypt.hash(password, 10);
@@ -252,15 +385,16 @@ io.on('connection', (socket) => {
         color: data.color || '#5288c1',
         initials: data.initials || name.slice(0, 2).toUpperCase(),
         avatar: null,
-        contacts: [], mutedChats: [],
+        contacts: [], mutedChats: [], blocked: [],
         settings: { theme: 'light', accent: '#3390ec', language: 'ru' },
         createdAt: now()
       };
-      db.users[userId] = user;
-      db.usernames[username] = userId;
+      await Promise.all([
+        col.users.insertOne(user),
+        col.usernames.insertOne({ username, userId })
+      ]);
       const tok = newToken();
-      sessions.set(tok, userId);
-      save();
+      await sessionSet(tok, userId);
       attachUser(userId, tok, true);
     } catch (e) {
       console.error('[register]', e);
@@ -272,13 +406,13 @@ io.on('connection', (socket) => {
     try {
       const username = String(data.username || '').trim().toLowerCase();
       const password = String(data.password || '');
-      const userId = db.usernames[username];
+      const userId = await getUserIdByUsername(username);
       if (!userId) return socket.emit('auth-error', { text: 'Неверный логин или пароль' });
-      const u = db.users[userId];
+      const u = await getUser(userId);
       const ok = await bcrypt.compare(password, u.password);
       if (!ok) return socket.emit('auth-error', { text: 'Неверный логин или пароль' });
       const tok = newToken();
-      sessions.set(tok, userId);
+      await sessionSet(tok, userId);
       attachUser(userId, tok, false);
     } catch (e) {
       console.error('[login]', e);
@@ -286,12 +420,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('auto-login', (data = {}) => {
-    const { userId, token } = data;
-    if (!userId || !token || !db.users[userId] || sessions.get(token) !== userId) {
-      return socket.emit('auth-error', { text: 'Сессия истекла' });
+  socket.on('auto-login', async (data = {}) => {
+    try {
+      const { userId, token } = data;
+      const owner = await sessionGet(token);
+      const u = userId ? await getUser(userId) : null;
+      if (!userId || !token || !u || owner !== userId) {
+        return socket.emit('auth-error', { text: 'Сессия истекла' });
+      }
+      attachUser(userId, token, false);
+    } catch (e) {
+      console.error('[auto-login]', e);
+      socket.emit('auth-error', { text: 'Ошибка восстановления сессии' });
     }
-    attachUser(userId, token, false);
   });
 
   socket.on('disconnect', () => {
@@ -302,29 +443,33 @@ io.on('connection', (socket) => {
       set.delete(socket.id);
       if (set.size === 0) {
         online.delete(userId);
-        const u = db.users[userId];
-        if (u) io.emit('user-updated', { userId, user: pubUser(u) });
+        getUser(userId).then(u => { if (u) io.emit('user-updated', { userId, user: pubUser(u) }); });
       }
     }
   });
 
-  const auth = (fn) => (data) => {
+  // auth-обёртка: асинхронная, с перехватом ошибок
+  const auth = (fn) => async (data, cb) => {
     if (!socket.data.userId) return;
-    try { fn(data || {}); } catch (e) { console.error('[handler]', e); }
+    try { await fn(data || {}, cb); } catch (e) { console.error('[handler]', e); }
   };
 
-  socket.on('message', auth((data) => {
+  socket.on('message', auth(async (data) => {
     const userId = socket.data.userId;
-    const u = db.users[userId];
+    const u = await getUser(userId);
+    if (!u) return;
     const to = String(data.to || '');
     if (!to) return;
     if (to.indexOf('r_') === 0) {
-      if (!inRoom(userId, to)) return;
-      if (!canWriteRoom(userId, db.rooms[to])) return socket.emit('error-msg', { text: 'Только админы могут писать' });
+      const room = await getRoom(to);
+      if (!inRoom(userId, room)) return;
+      if (!canWriteRoom(userId, room)) return socket.emit('error-msg', { text: 'Только админы могут писать' });
     } else if (to !== 'public' && to !== 'saved') {
       // личный чат: проверка блокировки (в любую сторону)
-      if (!db.users[to]) return;
-      if (isBlockedAny(userId, to)) {
+      const [target, users] = await Promise.all([getUser(to), getAllUsers()]);
+      if (!target) return;
+      const usersById = indexById(users);
+      if (isBlockedAny(userId, to, usersById)) {
         const byMe = !!(u.blocked && u.blocked.indexOf(to) >= 0);
         return socket.emit('error-msg', { text: byMe ? 'Пользователь заблокирован. Разблокируйте его.' : 'Вы заблокированы этим пользователем' });
       }
@@ -342,19 +487,21 @@ io.on('connection', (socket) => {
       deliveredTo: [], readBy: [], reactions: {},
       edited: false, deleted: false, pinned: false
     };
-    db.messages.push(msg);
-    save();
+    await col.messages.insertOne(msg);
 
-    Object.keys(db.users).forEach(rid => {
-      if (!canSeeMessage(msg, rid)) return;
+    const [users, roomsArr] = await Promise.all([getAllUsers(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    const usersById = indexById(users);
+    for (const rid of Object.keys(usersById)) {
+      if (!canSeeMessage(msg, rid, roomsById)) continue;
       // блокировка скрывает личные сообщения от обеих сторон (в т.ч. уже отправленные)
       if (msg.to !== 'public' && msg.to !== 'saved' && String(msg.to).indexOf('r_') !== 0) {
         const other = msg.from === rid ? msg.to : msg.from;
-        if (isBlockedAny(rid, other)) return;
+        if (isBlockedAny(rid, other, usersById)) continue;
       }
       emitToUser(rid, 'message', msg);
       if (rid !== userId) {
-        const me = db.users[rid];
+        const me = usersById[rid];
         const key = msg.to === 'public' ? 'public'
           : msg.to === 'saved' ? 'saved'
           : msg.to.indexOf('r_') === 0 ? msg.to
@@ -363,112 +510,119 @@ io.on('connection', (socket) => {
           sendPush(rid, u.name, msg.text || 'Файл');
         }
       }
-    });
+    }
   }));
 
-  socket.on('delivered', auth((data) => {
+  socket.on('delivered', auth(async (data) => {
     const userId = socket.data.userId;
-    (data.messageIds || []).forEach(id => {
-      const m = db.messages.find(x => x.id === id);
-      if (!m) return;
-      if (!m.deliveredTo) m.deliveredTo = [];
-      if (m.from !== userId && m.deliveredTo.indexOf(userId) < 0) m.deliveredTo.push(userId);
-      emitToUser(m.from, 'message-update', m);
-    });
-    save();
+    for (const id of (data.messageIds || [])) {
+      const m = await getMessage(id);
+      if (!m) continue;
+      if (m.from === userId) continue;
+      await col.messages.updateOne({ id }, { $addToSet: { deliveredTo: userId } });
+      const fresh = await getMessage(id);
+      emitToUser(m.from, 'message-update', fresh);
+    }
   }));
 
-  socket.on('read', auth((data) => {
+  socket.on('read', auth(async (data) => {
     const userId = socket.data.userId;
-    (data.messageIds || []).forEach(id => {
-      const m = db.messages.find(x => x.id === id);
-      if (!m) return;
-      if (!m.readBy) m.readBy = [];
-      if (!m.deliveredTo) m.deliveredTo = [];
-      if (m.from !== userId && m.readBy.indexOf(userId) < 0) m.readBy.push(userId);
-      if (m.from !== userId && m.deliveredTo.indexOf(userId) < 0) m.deliveredTo.push(userId);
-      emitToUser(m.from, 'message-update', m);
-    });
-    save();
+    for (const id of (data.messageIds || [])) {
+      const m = await getMessage(id);
+      if (!m) continue;
+      if (m.from === userId) continue;
+      await col.messages.updateOne({ id }, { $addToSet: { readBy: userId, deliveredTo: userId } });
+      const fresh = await getMessage(id);
+      emitToUser(m.from, 'message-update', fresh);
+    }
   }));
 
-  socket.on('typing', auth((data) => {
+  socket.on('typing', auth(async (data) => {
     const userId = socket.data.userId;
-    const u = db.users[userId];
+    const u = await getUser(userId);
+    if (!u) return;
     const to = String(data.to || '');
     if (!to || to === 'saved') return;
     const payload = { to, from: userId, fromName: u.name };
     if (to === 'public') socket.broadcast.emit('typing', payload);
     else if (to.indexOf('r_') === 0) {
-      const r = db.rooms[to];
+      const r = await getRoom(to);
       if (!r) return;
       r.members.forEach(mid => { if (mid !== userId) emitToUser(mid, 'typing', payload); });
     } else {
-      if (isBlockedAny(userId, to)) return;
+      const [users] = await Promise.all([getAllUsers()]);
+      if (isBlockedAny(userId, to, indexById(users))) return;
       emitToUser(to, 'typing', payload);
     }
   }));
 
-  socket.on('react-message', auth((data) => {
+  socket.on('react-message', auth(async (data) => {
     const userId = socket.data.userId;
-    const m = db.messages.find(x => x.id === data.messageId);
+    const m = await getMessage(data.messageId);
     if (!m) return;
     const em = String(data.emoji || '').slice(0, 8);
     if (!em) return;
-    if (!m.reactions) m.reactions = {};
-    if (!m.reactions[em]) m.reactions[em] = [];
-    const i = m.reactions[em].indexOf(userId);
-    if (i >= 0) m.reactions[em].splice(i, 1); else m.reactions[em].push(userId);
-    if (!m.reactions[em].length) delete m.reactions[em];
-    save();
-    Object.keys(db.users).forEach(rid => {
-      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    const cur = (m.reactions && m.reactions[em]) || [];
+    const next = cur.indexOf(userId) >= 0 ? cur.filter(x => x !== userId) : cur.concat(userId);
+    const upd = next.length ? { $set: { ['reactions.' + em]: next } } : { $unset: { ['reactions.' + em]: '' } };
+    await col.messages.updateOne({ id: m.id }, upd);
+    const fresh = await getMessage(m.id);
+    const [users, roomsArr] = await Promise.all([getAllUsers(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    Object.keys(indexById(users)).forEach(rid => {
+      if (canSeeMessage(fresh, rid, roomsById)) emitToUser(rid, 'message-update', fresh);
     });
   }));
 
-  socket.on('pin-message', auth((data) => {
+  socket.on('pin-message', auth(async (data) => {
     const userId = socket.data.userId;
-    const m = db.messages.find(x => x.id === data.messageId);
+    const m = await getMessage(data.messageId);
     if (!m) return;
     if (typeof m.to === 'string' && m.to.indexOf('r_') === 0) {
-      const r = db.rooms[m.to];
+      const r = await getRoom(m.to);
       if (!r) return;
       const role = (r.roles && r.roles[userId]) || (r.createdBy === userId ? 'owner' : 'member');
       if (role !== 'owner' && role !== 'admin') return;
     }
-    m.pinned = !m.pinned;
-    save();
-    Object.keys(db.users).forEach(rid => {
-      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    await col.messages.updateOne({ id: m.id }, { $set: { pinned: !m.pinned } });
+    const fresh = await getMessage(m.id);
+    const [users, roomsArr] = await Promise.all([getAllUsers(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    Object.keys(indexById(users)).forEach(rid => {
+      if (canSeeMessage(fresh, rid, roomsById)) emitToUser(rid, 'message-update', fresh);
     });
   }));
 
-  socket.on('edit-message', auth((data) => {
+  socket.on('edit-message', auth(async (data) => {
     const userId = socket.data.userId;
-    const m = db.messages.find(x => x.id === data.messageId);
+    const m = await getMessage(data.messageId);
     if (!m || m.from !== userId) return;
     if (now() - m.timestamp > 24 * 60 * 60 * 1000) return socket.emit('error-msg', { text: 'Слишком поздно редактировать' });
     const txt = String(data.newText || '').trim().slice(0, 4000);
     if (!txt) return;
-    m.text = txt; m.edited = true;
-    save();
-    Object.keys(db.users).forEach(rid => {
-      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    await col.messages.updateOne({ id: m.id }, { $set: { text: txt, edited: true } });
+    const fresh = await getMessage(m.id);
+    const [users, roomsArr] = await Promise.all([getAllUsers(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    Object.keys(indexById(users)).forEach(rid => {
+      if (canSeeMessage(fresh, rid, roomsById)) emitToUser(rid, 'message-update', fresh);
     });
   }));
 
-  socket.on('delete-message', auth((data) => {
+  socket.on('delete-message', auth(async (data) => {
     const userId = socket.data.userId;
-    const m = db.messages.find(x => x.id === data.messageId);
+    const m = await getMessage(data.messageId);
     if (!m || m.from !== userId) return;
-    m.deleted = true; m.text = ''; m.file = null; m.reactions = {}; m.pinned = false;
-    save();
-    Object.keys(db.users).forEach(rid => {
-      if (canSeeMessage(m, rid)) emitToUser(rid, 'message-update', m);
+    await col.messages.updateOne({ id: m.id }, { $set: { deleted: true, text: '', file: null, reactions: {}, pinned: false } });
+    const fresh = await getMessage(m.id);
+    const [users, roomsArr] = await Promise.all([getAllUsers(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    Object.keys(indexById(users)).forEach(rid => {
+      if (canSeeMessage(fresh, rid, roomsById)) emitToUser(rid, 'message-update', fresh);
     });
   }));
 
-  socket.on('create-room', auth((data) => {
+  socket.on('create-room', auth(async (data) => {
     const userId = socket.data.userId;
     const name = String(data.name || '').trim().slice(0, 60);
     if (!name) return;
@@ -483,80 +637,83 @@ io.on('connection', (socket) => {
       color: '#5288c1'
     };
     if (Array.isArray(data.inviteUsernames)) {
-      data.inviteUsernames.forEach(un => {
+      for (const un of data.inviteUsernames) {
         const clean = String(un || '').replace(/^@/, '').trim().toLowerCase();
-        const iid = db.usernames[clean];
+        const iid = await getUserIdByUsername(clean);
         if (iid && iid !== userId && room.members.indexOf(iid) < 0) {
           room.members.push(iid);
           room.roles[iid] = 'member';
           emitToUser(iid, 'invited', { names: [name] });
         }
-      });
+      }
     }
-    db.rooms[rid] = room;
-    save();
+    await putRoom(room);
     socket.emit('room-created', roomView(room));
-    broadcastRoomsToAll();
-    broadcastUsersToAll();
+    await broadcastRoomsToAll();
+    await broadcastUsersToAll();
   }));
 
-  socket.on('invite-to-room', auth((data) => {
+  socket.on('invite-to-room', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
     if (myRole !== 'owner' && myRole !== 'admin') return;
     const added = [];
-    (data.usernames || []).forEach(un => {
+    for (const un of (data.usernames || [])) {
       const clean = String(un || '').replace(/^@/, '').trim().toLowerCase();
-      const iid = db.usernames[clean];
+      const iid = await getUserIdByUsername(clean);
       if (iid && r.members.indexOf(iid) < 0) {
         r.members.push(iid);
         r.roles[iid] = 'member';
-        added.push(db.users[iid].name);
+        const tu = await getUser(iid);
+        if (tu) added.push(tu.name);
         emitToUser(iid, 'invited', { names: [r.name] });
       }
-    });
-    save();
+    }
+    await putRoom(r);
     socket.emit('toast-msg', { text: added.length ? 'Приглашены: ' + added.join(', ') : 'Никого не добавили' });
-    broadcastRoomsToAll();
-    broadcastUsersToAll();
+    await broadcastRoomsToAll();
+    await broadcastUsersToAll();
   }));
 
-  socket.on('join-room', auth((data) => {
+  socket.on('join-room', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     if (r.type === 'channel') return;
     if (r.members.indexOf(userId) < 0) {
       r.members.push(userId);
       r.roles[userId] = 'member';
-      save();
-      broadcastRoomsToAll();
-      broadcastUsersToAll();
+      await putRoom(r);
+      await broadcastRoomsToAll();
+      await broadcastUsersToAll();
     }
   }));
 
-  socket.on('leave-room', auth((data) => {
+  socket.on('leave-room', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     const i = r.members.indexOf(userId);
     if (i >= 0) r.members.splice(i, 1);
     delete r.roles[userId];
-    if (!r.members.length) delete db.rooms[r.id];
-    else if (r.createdBy === userId) {
-      r.createdBy = r.members[0];
-      r.roles[r.createdBy] = 'owner';
+    if (!r.members.length) {
+      await col.rooms.deleteOne({ id: r.id });
+    } else {
+      if (r.createdBy === userId) {
+        r.createdBy = r.members[0];
+        r.roles[r.createdBy] = 'owner';
+      }
+      await putRoom(r);
     }
-    save();
-    broadcastRoomsToAll();
-    broadcastUsersToAll();
+    await broadcastRoomsToAll();
+    await broadcastUsersToAll();
   }));
 
-  socket.on('kick-user', auth((data) => {
+  socket.on('kick-user', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
     if (myRole !== 'owner' && myRole !== 'admin') return;
@@ -568,217 +725,206 @@ io.on('connection', (socket) => {
     const i = r.members.indexOf(target);
     if (i >= 0) r.members.splice(i, 1);
     delete r.roles[target];
-    save();
-    broadcastRoomsToAll();
-    broadcastUsersToAll();
+    await putRoom(r);
+    await broadcastRoomsToAll();
+    await broadcastUsersToAll();
   }));
 
-  socket.on('set-role', auth((data) => {
+  socket.on('set-role', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     if (r.roles[userId] !== 'owner' && r.createdBy !== userId) return;
     const target = data.targetUserId;
     if (!target || target === userId) return;
     if (r.members.indexOf(target) < 0) return;
     r.roles[target] = data.role === 'admin' ? 'admin' : 'member';
-    save();
-    broadcastRoomsToAll();
+    await putRoom(r);
+    await broadcastRoomsToAll();
   }));
 
-  socket.on('add-contact', auth((data) => {
+  socket.on('add-contact', auth(async (data) => {
     const userId = socket.data.userId;
     const cid = data.contactId;
-    if (!db.users[cid] || cid === userId) return;
-    const u = db.users[userId];
-    if (!u.contacts) u.contacts = [];
-    if (u.contacts.indexOf(cid) < 0) u.contacts.push(cid);
-    save();
+    if (!await getUser(cid) || cid === userId) return;
+    await col.users.updateOne({ userId }, { $addToSet: { contacts: cid } });
     socket.emit('contact-added', { userId: cid });
-    socket.emit('users', usersForViewer(userId));
+    socket.emit('users', await usersForViewer(userId));
   }));
 
-  socket.on('remove-contact', auth((data) => {
+  socket.on('remove-contact', auth(async (data) => {
     const userId = socket.data.userId;
     const cid = data.contactId;
-    const u = db.users[userId];
-    if (!u.contacts) u.contacts = [];
-    const i = u.contacts.indexOf(cid);
-    if (i >= 0) u.contacts.splice(i, 1);
-    save();
+    await col.users.updateOne({ userId }, { $pull: { contacts: cid } });
     socket.emit('contact-removed', { userId: cid });
-    socket.emit('users', usersForViewer(userId));
+    socket.emit('users', await usersForViewer(userId));
   }));
 
-  socket.on('search-user', auth((data) => {
+  socket.on('search-user', auth(async (data) => {
     const userId = socket.data.userId;
-    const meU = db.users[userId];
+    const users = await getAllUsers();
+    const usersById = indexById(users);
+    const meU = usersById[userId];
     const myBlocked = (meU && Array.isArray(meU.blocked)) ? meU.blocked : [];
     const q = String(data.query || '').replace(/^@/, '').toLowerCase();
     if (!q) return socket.emit('search-result', { results: [] });
     const out = [];
-    Object.values(db.users).forEach(u => {
+    users.forEach(u => {
       if (u.userId === userId) return;
-      if (myBlocked.indexOf(u.userId) >= 0) return;               // я заблокировал — не ищу
-      const other = db.users[u.userId];
-      if (Array.isArray(other.blocked) && other.blocked.indexOf(userId) >= 0) return; // он заблокировал меня — невидим
+      if (myBlocked.indexOf(u.userId) >= 0) return;                 // я заблокировал — не ищу
+      if (Array.isArray(u.blocked) && u.blocked.indexOf(userId) >= 0) return; // он заблокировал меня — невидим
       if (u.username.indexOf(q) >= 0 || u.name.toLowerCase().indexOf(q) >= 0) out.push(pubUser(u));
     });
     out.sort((a, b) => a.username.indexOf(q) - b.username.indexOf(q));
     socket.emit('search-result', { results: out.slice(0, 30) });
   }));
 
-  socket.on('search-messages', auth((data) => {
+  socket.on('search-messages', auth(async (data) => {
     const userId = socket.data.userId;
     const q = String(data.query || '').toLowerCase().trim();
     if (q.length < 2) return socket.emit('search-messages-result', { query: q, results: [] });
-    const results = db.messages
-      .filter(m => !m.deleted && canSeeMessage(m, userId) && (m.text || '').toLowerCase().indexOf(q) >= 0)
+    const [messages, roomsArr] = await Promise.all([
+      col.messages.find({ deleted: { $ne: true } }).sort({ timestamp: 1 }).limit(2000).toArray(),
+      getAllRooms()
+    ]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    const results = messages
+      .filter(m => canSeeMessage(m, userId, roomsById) && (m.text || '').toLowerCase().indexOf(q) >= 0)
       .slice(-100);
     socket.emit('search-messages-result', { query: q, results });
   }));
 
-  socket.on('create-invite', auth((data) => {
+  socket.on('create-invite', auth(async (data) => {
     const userId = socket.data.userId;
-    const r = db.rooms[data.roomId];
+    const r = await getRoom(data.roomId);
     if (!r) return;
     const myRole = r.roles[userId] || (r.createdBy === userId ? 'owner' : 'member');
     if (myRole !== 'owner' && myRole !== 'admin') return;
     const code = crypto.randomBytes(6).toString('hex');
-    db.invites[code] = { roomId: r.id, createdBy: userId, createdAt: now() };
-    save();
+    await col.invites.updateOne({ code }, { $set: { code, roomId: r.id, createdBy: userId, createdAt: now() } }, { upsert: true });
     socket.emit('invite-created', { link: '/join/' + code });
   }));
 
-  socket.on('redeem-invite', auth((data) => {
+  socket.on('redeem-invite', auth(async (data) => {
     const userId = socket.data.userId;
-    const inv = db.invites[String(data.code || '')];
+    const inv = await col.invites.findOne({ code: String(data.code || '') });
     if (!inv) return socket.emit('invite-error', { text: 'Ссылка недействительна' });
-    const r = db.rooms[inv.roomId];
+    const r = await getRoom(inv.roomId);
     if (!r) return socket.emit('invite-error', { text: 'Комната не найдена' });
     const already = r.members.indexOf(userId) >= 0;
     if (!already) {
       r.members.push(userId);
       r.roles[userId] = 'member';
-      save();
-      broadcastRoomsToAll();
-      broadcastUsersToAll();
+      await putRoom(r);
+      await broadcastRoomsToAll();
+      await broadcastUsersToAll();
     }
     socket.emit('invite-redeemed', { roomId: r.id, alreadyMember: already });
   }));
 
-  socket.on('mute-chat', auth((data) => {
+  socket.on('mute-chat', auth(async (data) => {
     const userId = socket.data.userId;
-    const u = db.users[userId];
-    if (!u.mutedChats) u.mutedChats = [];
     const cid = String(data.chatId || '');
     if (!cid) return;
-    const i = u.mutedChats.indexOf(cid);
-    if (data.muted && i < 0) u.mutedChats.push(cid);
-    else if (!data.muted && i >= 0) u.mutedChats.splice(i, 1);
-    save();
-    socket.emit('mutes-updated', { mutedChats: u.mutedChats });
+    if (data.muted) await col.users.updateOne({ userId }, { $addToSet: { mutedChats: cid } });
+    else await col.users.updateOne({ userId }, { $pull: { mutedChats: cid } });
+    const u = await getUser(userId);
+    socket.emit('mutes-updated', { mutedChats: u.mutedChats || [] });
   }));
 
   // ---------- Блокировка пользователя ----------
-  socket.on('block-user', auth((data) => {
+  socket.on('block-user', auth(async (data) => {
     const userId = socket.data.userId;
     const target = String(data.targetUserId || '');
-    if (!target || target === userId || !db.users[target]) return;
-    const u = db.users[userId];
-    if (!Array.isArray(u.blocked)) u.blocked = [];
-    if (u.blocked.indexOf(target) < 0) u.blocked.push(target);
-    // убрать из контактов в обе стороны
-    if (Array.isArray(u.contacts)) {
-      const ci = u.contacts.indexOf(target);
-      if (ci >= 0) u.contacts.splice(ci, 1);
-    }
-    const t2 = db.users[target];
-    if (Array.isArray(t2.contacts)) {
-      const ti = t2.contacts.indexOf(userId);
-      if (ti >= 0) t2.contacts.splice(ti, 1);
-    }
-    save();
-    socket.emit('blocked-updated', { blocked: u.blocked.slice() });
-    socket.emit('users', usersForViewer(userId));
-    socket.emit('history', msgsFor(userId));
-    broadcastUsersToAll();
-    emitToUser(target, 'users', usersForViewer(target));
+    if (!target || target === userId || !await getUser(target)) return;
+    await col.users.updateOne({ userId }, { $addToSet: { blocked: target }, $pull: { contacts: target } });
+    await col.users.updateOne({ userId: target }, { $pull: { contacts: userId } });
+    const u = await getUser(userId);
+    socket.emit('blocked-updated', { blocked: (u.blocked || []).slice() });
+    socket.emit('users', await usersForViewer(userId));
+    socket.emit('history', await msgsFor(userId));
+    await broadcastUsersToAll();
+    emitToUser(target, 'users', await usersForViewer(target));
     socket.emit('toast-msg', { text: 'Пользователь заблокирован' });
   }));
 
-  socket.on('unblock-user', auth((data) => {
+  socket.on('unblock-user', auth(async (data) => {
     const userId = socket.data.userId;
     const target = String(data.targetUserId || '');
-    const u = db.users[userId];
-    if (!Array.isArray(u.blocked)) u.blocked = [];
-    const i = u.blocked.indexOf(target);
-    if (i >= 0) u.blocked.splice(i, 1);
-    save();
-    socket.emit('blocked-updated', { blocked: u.blocked.slice() });
-    socket.emit('users', usersForViewer(userId));
-    socket.emit('history', msgsFor(userId));
-    broadcastUsersToAll();
+    await col.users.updateOne({ userId }, { $pull: { blocked: target } });
+    const u = await getUser(userId);
+    socket.emit('blocked-updated', { blocked: (u.blocked || []).slice() });
+    socket.emit('users', await usersForViewer(userId));
+    socket.emit('history', await msgsFor(userId));
+    await broadcastUsersToAll();
     socket.emit('toast-msg', { text: 'Пользователь разблокирован' });
   }));
 
   // ---------- Удаление чата (только у себя) ----------
-  socket.on('delete-chat', auth((data) => {
+  socket.on('delete-chat', auth(async (data) => {
     const userId = socket.data.userId;
     const chatId = String(data.chatId || '');
     if (!chatId) return;
-    if (!db.hiddenChats[userId]) db.hiddenChats[userId] = {};
-    let count = 0;
-    db.messages.forEach(m => {
-      if (!canSeeMessage(m, userId)) return;
+    const [messages, roomsArr] = await Promise.all([col.messages.find({}).toArray(), getAllRooms()]);
+    const roomsById = indexById(roomsArr.map(hydrateRoom));
+    const hidden = await getHiddenMap(userId);
+    const ids = Object.assign({}, hidden);
+    messages.forEach(m => {
+      if (ids[m.id]) return;
+      if (!canSeeMessage(m, userId, roomsById)) return;
       let key;
       if (m.to === 'public') key = 'public';
       else if (m.to === 'saved') key = 'saved';
       else if (String(m.to).indexOf('r_') === 0) key = m.to;
       else key = (m.from === userId ? m.to : m.from);
-      if (key === chatId) { db.hiddenChats[userId][m.id] = true; count++; }
+      if (key === chatId) ids[m.id] = true;
     });
+    await col.hiddenChats.updateOne({ userId }, { $set: { userId, ids } }, { upsert: true });
     // если это комната — выйти из неё (чат исчезнет из списка полностью)
     if (chatId.indexOf('r_') === 0) {
-      const r = db.rooms[chatId];
+      const r = await getRoom(chatId);
       if (r) {
         const mi = r.members.indexOf(userId);
         if (mi >= 0) {
           r.members.splice(mi, 1);
           delete r.roles[userId];
-          if (!r.members.length) delete db.rooms[r.id];
-          else if (r.createdBy === userId) { r.createdBy = r.members[0]; r.roles[r.createdBy] = 'owner'; }
-          broadcastRoomsToAll();
-          broadcastUsersToAll();
+          if (!r.members.length) await col.rooms.deleteOne({ id: r.id });
+          else {
+            if (r.createdBy === userId) { r.createdBy = r.members[0]; r.roles[r.createdBy] = 'owner'; }
+            await putRoom(r);
+          }
+          await broadcastRoomsToAll();
+          await broadcastUsersToAll();
         }
       }
     }
-    save();
     socket.emit('chat-deleted', { chatId });
-    socket.emit('history', msgsFor(userId));
+    socket.emit('history', await msgsFor(userId));
     socket.emit('toast-msg', { text: 'Чат удалён' });
   }));
 
-  socket.on('update-settings', auth((data) => {
+  socket.on('update-settings', auth(async (data) => {
     const userId = socket.data.userId;
-    const u = db.users[userId];
     if (data.settings && typeof data.settings === 'object') {
-      u.settings = Object.assign({}, u.settings, data.settings);
-      save();
+      const u = await getUser(userId);
+      const merged = Object.assign({}, u.settings, data.settings);
+      await col.users.updateOne({ userId }, { $set: { settings: merged } });
     }
   }));
 
   socket.on('update-profile', auth(async (data) => {
     const userId = socket.data.userId;
-    const u = db.users[userId];
+    const u = await getUser(userId);
+    if (!u) return;
+    const set = {};
     if (typeof data.name === 'string' && data.name.trim()) {
-      u.name = data.name.trim().slice(0, 30);
-      u.initials = u.name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2)
-        || u.name.slice(0, 2).toUpperCase();
+      set.name = data.name.trim().slice(0, 30);
+      set.initials = set.name.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2)
+        || set.name.slice(0, 2).toUpperCase();
     }
-    if (data.color) u.color = data.color;
-    if (data.initials) u.initials = data.initials;
-    if (data.avatar === null || typeof data.avatar === 'string') u.avatar = data.avatar;
+    if (data.color) set.color = data.color;
+    if (data.initials) set.initials = data.initials;
+    if (data.avatar === null || typeof data.avatar === 'string') set.avatar = data.avatar;
     // смена @username
     if (typeof data.username === 'string' && data.username.trim()) {
       const nu = data.username.trim().toLowerCase().replace(/^@/, '');
@@ -786,61 +932,73 @@ io.on('connection', (socket) => {
         return socket.emit('profile-error', { text: 'Некорректный @username' });
       }
       if (nu !== u.username) {
-        if (db.usernames[nu]) return socket.emit('profile-error', { text: '@username уже занят' });
-        delete db.usernames[u.username];
-        u.username = nu;
-        db.usernames[nu] = userId;
+        if (await getUserIdByUsername(nu)) return socket.emit('profile-error', { text: '@username уже занят' });
+        await col.usernames.deleteOne({ username: u.username });
+        set.username = nu;
+        await col.usernames.insertOne({ username: nu, userId });
       }
     }
-    save();
-    io.emit('user-updated', { userId, user: pubUser(u) });
-    socket.emit('profile-saved', { username: u.username });
+    await col.users.updateOne({ userId }, { $set: set });
+    const fresh = await getUser(userId);
+    io.emit('user-updated', { userId, user: pubUser(fresh) });
+    socket.emit('profile-saved', { username: fresh.username });
   }));
 
   socket.on('change-password', async (data = {}) => {
-    const userId = socket.data.userId;
-    if (!userId) return;
-    const u = db.users[userId];
-    const ok = await bcrypt.compare(String(data.oldPassword || ''), u.password);
-    if (!ok) return socket.emit('toast-msg', { text: 'Неверный старый пароль' });
-    const np = String(data.newPassword || '');
-    if (np.length < 4) return socket.emit('toast-msg', { text: 'Минимум 4 символа' });
-    u.password = await bcrypt.hash(np, 10);
-    // сброс ключей E2E: старые зашифрованные чаты станут недоступны, новые — с новым ключом
-    Object.keys(db.encKeys).forEach(k => { if (k.indexOf(userId + ':') === 0) delete db.encKeys[k]; });
-    try { socket.handshake.session && null; } catch (e) {}
-    save();
-    socket.emit('password-changed', {});
-    socket.emit('toast-msg', { text: 'Пароль изменён. Ключи шифрования пересозданы.' });
+    try {
+      const userId = socket.data.userId;
+      if (!userId) return;
+      const u = await getUser(userId);
+      if (!u) return;
+      const ok = await bcrypt.compare(String(data.oldPassword || ''), u.password);
+      if (!ok) return socket.emit('toast-msg', { text: 'Неверный старый пароль' });
+      const np = String(data.newPassword || '');
+      if (np.length < 4) return socket.emit('toast-msg', { text: 'Минимум 4 символа' });
+      const hash = await bcrypt.hash(np, 10);
+      await col.users.updateOne({ userId }, { $set: { password: hash } });
+      // сброс ключей E2E: старые зашифрованные чаты станут недоступны, новые — с новым ключом
+      await col.encKeys.deleteMany({ by: userId });
+      socket.emit('password-changed', {});
+      socket.emit('toast-msg', { text: 'Пароль изменён. Ключи шифрования пересозданы.' });
+    } catch (e) { console.error('[change-password]', e); }
   });
 
   // ---------- E2E: хранение публичных чат-ключей (зашифрованных мастер-паролем клиента) ----------
-  socket.on('enc-keys-get', auth((data, cb) => {
+  socket.on('enc-keys-get', auth(async (data, cb) => {
     const chatId = String((data && data.chatId) || '');
     if (!chatId) { if (typeof cb === 'function') cb(null); return; }
-    if (typeof cb === 'function') cb(db.encKeys[chatId] || null);
+    const rec = await getEncKey(chatId);
+    if (typeof cb === 'function') cb(rec ? { ek: rec.ek, salt: rec.salt, by: rec.by } : null);
   }));
 
-  socket.on('enc-keys-set', auth((data) => {
+  socket.on('enc-keys-set', auth(async (data) => {
     const chatId = String((data && data.chatId) || '');
     const rec = data && data.record;
     if (!chatId || !rec || typeof rec !== 'object') return;
     // разрешаем запись только участникам личного чата или комнаты
     const userId = socket.data.userId;
     let allowed = false;
-    if (chatId.indexOf('r_') === 0) allowed = inRoom(userId, chatId);
+    if (chatId.indexOf('r_') === 0) allowed = inRoom(userId, await getRoom(chatId));
     else if (chatId === 'public' || chatId === 'saved') allowed = true;
-    else allowed = !!db.users[chatId];
+    else allowed = !!(await getUser(chatId));
     if (!allowed) return;
-    if (db.encKeys[chatId]) return; // ключ устанавливается один раз (первым участником)
-    db.encKeys[chatId] = {
+    const exists = await getEncKey(chatId);
+    if (exists) return; // ключ устанавливается один раз (первым участником)
+    const doc = {
+      chatId,
       ek: String(rec.ek || '').slice(0, 200),
       salt: String(rec.salt || '').slice(0, 64),
       by: userId
     };
-    save();
-    io.emit('enc-keys-updated', { chatId, record: db.encKeys[chatId] });
+    await col.encKeys.updateOne({ chatId }, { $set: doc }, { upsert: true });
+    io.emit('enc-keys-updated', { chatId, record: { ek: doc.ek, salt: doc.salt, by: doc.by } });
   }));
 });
 
-server.listen(PORT, () => console.log('Pulse listening on ' + PORT));
+// ---------- Старт ----------
+startMongo()
+  .then(() => server.listen(PORT, () => console.log('Pulse listening on ' + PORT)))
+  .catch(e => { console.error('[mongo] fatal:', e); process.exit(1); });
+
+process.on('SIGINT', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
+process.on('SIGTERM', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
