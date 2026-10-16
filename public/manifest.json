@@ -45,22 +45,6 @@
       "purpose": "any"
     }
   ],
-  "screenshots": [
-    {
-      "src": "/screenshot-mobile.png",
-      "sizes": "1080x1920",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Мобильная версия Pulse"
-    },
-    {
-      "src": "/screenshot-desktop.png",
-      "sizes": "1920x1080",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "Десктопная версия Pulse"
-    }
-  ],
   "shortcuts": [
     {
       "name": "Сохранённые",
@@ -74,13 +58,6 @@
       "short_name": "Поиск",
       "url": "/?open=search",
       "description": "Поиск по @username",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Новая группа",
-      "short_name": "Группа",
-      "url": "/?open=newgroup",
-      "description": "Создать новую группу или канал",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ],
