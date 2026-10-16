@@ -647,7 +647,8 @@ body { height: 100vh; background: var(--chat-bg); color: var(--text); position: 
     <label>Имя</label>
     <input type="text" id="profileName" maxlength="30">
     <label>@username</label>
-    <input type="text" id="profileUsername" disabled style="opacity:.6">
+    <input type="text" id="profileUsername" maxlength="20">
+    <div class="hint" id="profileUsernameHint">3–20 символов: a-z, 0-9, _</div>
     <button class="primary-btn" id="profileSave">Сохранить</button>
     <button class="cancel-btn" id="profileCancel">Отмена</button>
   </div>
@@ -1048,6 +1049,70 @@ var settings = { theme:'light', accent:'#3390ec', language:'ru' };
 var activeCtx = null;
 var viewingUserId = null;
 
+// ---------- E2E-шифрование чатов (Web Crypto API) ----------
+var MASTER_PW = null;              // мастер-пароль: только в памяти вкладки
+var e2eChatKeys = {};              // chatId -> CryptoKey (AES-GCM 256)
+var e2ePending = {};               // chatId -> Promise инициализации ключа
+var e2eFails = {};                 // id сообщения -> true (не удалось расшифровать)
+var b64ToArrayBuffer = function(b){ var s=atob(b); var a=new Uint8Array(s.length); for(var i=0;i<s.length;i++)a[i]=s.charCodeAt(i); return a.buffer; };
+function abToB64(buf){ var b=new Uint8Array(buf), C=String.fromCharCode, chunks=[]; for(var i=0;i<b.length;i+=8192) chunks.push(C.apply(null,b.subarray(i,i+8192))); return btoa(chunks.join('')); }
+async function sha256Hex(str){ var d=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)); return abToB64(d).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_'); }
+function e2eEnabled(){ return !!(window.crypto && crypto.subtle && MASTER_PW); }
+function isEncMsg(m){ return m && typeof m.text === 'string' && m.text.indexOf('e2:v1:') === 0; }
+async function deriveChatKey(chatId, salt){
+  var enc = new TextEncoder();
+  var km = await crypto.subtle.importKey('raw', enc.encode(MASTER_PW), 'PBKDF2', false, ['deriveBits']);
+  var bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt: enc.encode(chatId + ':' + salt), iterations: 120000, hash: 'SHA-256' }, km, 256);
+  return crypto.subtle.importKey('raw', bits, { name:'AES-GCM' }, false, ['encrypt','decrypt']);
+}
+async function ensureChatKey(chatId){
+  if (!e2eEnabled()) return null;
+  if (e2eChatKeys[chatId]) return e2eChatKeys[chatId];
+  if (!e2ePending[chatId]) {
+    e2ePending[chatId] = new Promise(function(resolve){
+      socket.emit('enc-keys-get', { chatId: chatId }, async function(rec){
+        try {
+          var salt;
+          if (rec && rec.ek) { salt = rec.salt; }
+          else {
+            salt = abToB64(crypto.getRandomValues(new Uint8Array(12))).replace(/[^a-zA-Z0-9]/g,'').slice(0,16) || String(Date.now());
+            var k0 = await deriveChatKey(chatId, salt);
+            socket.emit('enc-keys-set', { chatId: chatId, record: { ek: 'aes-gcm-256', salt: salt } });
+            e2eChatKeys[chatId] = k0; resolve(k0); return;
+          }
+          var k = await deriveChatKey(chatId, salt);
+          e2eChatKeys[chatId] = k; resolve(k);
+        } catch(e){ resolve(null); }
+      });
+      setTimeout(function(){ if(!e2eChatKeys[chatId]) resolve(null); }, 4000);
+    });
+  }
+  return e2ePending[chatId];
+}
+async function e2eEncrypt(chatId, plain){
+  try {
+    var key = await ensureChatKey(chatId);
+    if (!key) return plain;
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv: iv }, key, new TextEncoder().encode(String(plain)));
+    return 'e2:v1:' + abToB64(iv.buffer) + ':' + abToB64(ct);
+  } catch(e){ return plain; }
+}
+async function e2eDecrypt(msg){
+  var chatId = chatKey(msg);
+  var key = await ensureChatKey(chatId);
+  if (!key) { e2eFails[msg.id] = true; renderMessages(); return; }
+  try {
+    var parts = msg.text.split(':');
+    var iv = b64ToArrayBuffer(parts[2]), ct = b64ToArrayBuffer(parts[3]);
+    var pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: iv }, key, ct);
+    msg.text = new TextDecoder().decode(pt);
+    delete e2eFails[msg.id];
+  } catch(e){ e2eFails[msg.id] = true; }
+  if (chatId === currentRoom) renderMessages();
+}
+function lockIconHtml(){ return '<span title="Сквозное шифрование (E2E)" style="color:var(--accent);font-size:11px">&#128274;</span>'; }
+
 function applyTheme() {
   document.documentElement.setAttribute('data-theme', settings.theme || 'light');
   document.documentElement.style.setProperty('--accent', settings.accent || '#3390ec');
@@ -1223,6 +1288,7 @@ function initUI() {
     if (!p || p.length < 4) return toast(t('pwd_short'));
     var colors = [['#ff6b6b','#ee5a6f'],['#4facfe','#00f2fe'],['#43e97b','#38f9d7'],['#fa709a','#fee140'],['#a18cd1','#fbc2eb'],['#f093fb','#f5576c']][Math.floor(Math.random()*6)];
     var initials = n.split(/\s+/).map(function(w){return w[0];}).join('').toUpperCase().slice(0,2) || n.slice(0,2).toUpperCase();
+    MASTER_PW = p; // мастер-пароль для E2E остаётся только в памяти вкладки
     socket.emit('register', { name:n, username:u, password:p, color:'linear-gradient(135deg,'+colors[0]+','+colors[1]+')', initials:initials });
   };
 
@@ -1231,6 +1297,7 @@ function initUI() {
     var p = $('loginPassword').value;
     if (!u) return toast(t('enter_username'));
     if (!p) return toast(t('pwd_short'));
+    MASTER_PW = p; // мастер-пароль для E2E остаётся только в памяти вкладки
     socket.emit('login', { username:u, password:p });
   };
   $('loginPassword').addEventListener('keydown', function(e){ if(e.key==='Enter') $('loginBtn').click(); });
@@ -1598,7 +1665,7 @@ function registerSocket() {
     }
   });
 
-  socket.on('history', function(m){ allMsgs = Array.isArray(m)?m:[]; renderMessages(); renderChats(); });
+  socket.on('history', function(m){ allMsgs = Array.isArray(m)?m:[]; allMsgs.forEach(function(x){ if (isEncMsg(x) && x.from !== me.userId) e2eDecrypt(x); }); renderMessages(); renderChats(); });
   socket.on('rooms', function(r){ rooms = r||[]; renderChats(); updateHeader(); updateInputState(); });
   socket.on('users', function(u){ users = u||[]; renderChats(); updateHeader(); });
 
@@ -1665,8 +1732,10 @@ function registerSocket() {
   socket.on('invite-error', function(d){ toast(d.text); });
 
   socket.on('message', function(msg){
+    var own = msg.from === me.userId;
+    if (own && isEncMsg(msg)) return; // свой шифрованный эхо-пакет: локально уже лежит открытый текст
     addMsg(msg);
-    if (msg.from !== me.userId) {
+    if (!own) {
       socket.emit('delivered',{userId:me.userId,messageIds:[msg.id]});
       var k = chatKey(msg);
       if (k === currentRoom && !document.hidden) {
@@ -1708,6 +1777,7 @@ function addMsg(m){
   if (allMsgs.some(function(x){return x.id===m.id;})) return;
   allMsgs.push(m);
   var k = chatKey(m);
+  if (isEncMsg(m) && m.from !== me.userId) e2eDecrypt(m); // E2E: расшифровка своим ключом чата
   if (k === currentRoom) renderMessages();
   else if (m.from !== me.userId) unread[k] = (unread[k]||0) + 1;
   renderChats();
@@ -1836,12 +1906,18 @@ function renderMessages(){
         if (m.text) {
           var tx = document.createElement('div');
           tx.className = 'msg-text';
-          tx.textContent = m.text;
+          if (isEncMsg(m)) {
+            if (e2eFails[m.id]) tx.textContent = '🔒 ' + (settings.language === 'en' ? 'Cannot decrypt (wrong master password?)' : 'Не удалось расшифровать (другой мастер-пароль?)');
+            else { tx.innerHTML = '<span class="encrypting"><span class="spin-mini"></span></span>'; ensureChatKey(chatKey(m)).then(function(){ e2eDecrypt(m); }); }
+          } else {
+            tx.textContent = m.text;
+          }
           bubble.appendChild(tx);
         }
         var meta = document.createElement('span');
         meta.className = 'msg-meta';
         var metaHtml = esc(m.time || fmtTime(m.timestamp));
+        if (!isMe && currentRoom !== 'public' && isEncMsg(m)) metaHtml += ' ' + lockIconHtml();
         if (m.edited) metaHtml += ' <span class="msg-edited">' + esc(t('edited')) + '</span>';
         metaHtml += status(m, currentRoom);
         meta.innerHTML = metaHtml;
@@ -1899,7 +1975,7 @@ function renderChats() {
     if ((m.to === 'public' || (typeof m.to === 'string' && m.to.indexOf('r_') === 0)) && m.fromName) {
       who = (m.from === me.userId ? t('you') + ': ' : m.fromName + ': ');
     }
-    return who + (m.text || (m.file ? '📎 ' + (m.file.name || t('file')) : ''));
+    return who + (isEncMsg(m) ? '🔒 ' + (settings.language==='en'?'Protected message':'Защищённое сообщение') : (m.text || (m.file ? '📎 ' + (m.file.name || t('file')) : '')));
   }
   function addRow(opts) {
     var lm = opts.lastMsg;
@@ -2361,17 +2437,22 @@ async function sendMessage() {
     btn.classList.remove('uploading');
     btn.disabled = false;
   }
+  var encText = text;
+  if (e2eEnabled() && currentRoom !== 'public' && text) {
+    encText = await e2eEncrypt(currentRoom, text); // E2E: сервер видит только ciphertext
+  }
   var msg = {
     id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
     from: me.userId, fromName: me.name,
     to: currentRoom,
-    text: text, file: filePayload, replyTo: replyTo,
+    text: encText, file: filePayload, replyTo: replyTo,
     timestamp: Date.now(), time: fmtTime(Date.now()),
     deliveredTo: [me.userId], readBy: [me.userId], reactions: {},
     edited: false, deleted: false, pinned: false
   };
   socket.emit('message', msg);
-  addMsg(msg);
+  var local = Object.assign({}, msg, { text: text }); // локально показываем открытый текст
+  addMsg(local);
   ta.value = '';
   ta.style.height = 'auto';
   pendingClear();

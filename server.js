@@ -24,7 +24,7 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
 }
 
 // ---------- DB ----------
-let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {}, hiddenChats: {} };
+let db = { users: {}, usernames: {}, messages: [], rooms: {}, invites: {}, subs: {}, hiddenChats: {}, encKeys: {} };
 try {
   if (fs.existsSync(DATA_FILE)) {
     const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -768,7 +768,7 @@ io.on('connection', (socket) => {
     }
   }));
 
-  socket.on('update-profile', auth((data) => {
+  socket.on('update-profile', auth(async (data) => {
     const userId = socket.data.userId;
     const u = db.users[userId];
     if (typeof data.name === 'string' && data.name.trim()) {
@@ -779,8 +779,22 @@ io.on('connection', (socket) => {
     if (data.color) u.color = data.color;
     if (data.initials) u.initials = data.initials;
     if (data.avatar === null || typeof data.avatar === 'string') u.avatar = data.avatar;
+    // смена @username
+    if (typeof data.username === 'string' && data.username.trim()) {
+      const nu = data.username.trim().toLowerCase().replace(/^@/, '');
+      if (!/^[a-z][a-z0-9_]{2,19}$/.test(nu)) {
+        return socket.emit('profile-error', { text: 'Некорректный @username' });
+      }
+      if (nu !== u.username) {
+        if (db.usernames[nu]) return socket.emit('profile-error', { text: '@username уже занят' });
+        delete db.usernames[u.username];
+        u.username = nu;
+        db.usernames[nu] = userId;
+      }
+    }
     save();
     io.emit('user-updated', { userId, user: pubUser(u) });
+    socket.emit('profile-saved', { username: u.username });
   }));
 
   socket.on('change-password', async (data = {}) => {
@@ -792,9 +806,41 @@ io.on('connection', (socket) => {
     const np = String(data.newPassword || '');
     if (np.length < 4) return socket.emit('toast-msg', { text: 'Минимум 4 символа' });
     u.password = await bcrypt.hash(np, 10);
+    // сброс ключей E2E: старые зашифрованные чаты станут недоступны, новые — с новым ключом
+    Object.keys(db.encKeys).forEach(k => { if (k.indexOf(userId + ':') === 0) delete db.encKeys[k]; });
+    try { socket.handshake.session && null; } catch (e) {}
     save();
-    socket.emit('toast-msg', { text: 'Пароль изменён' });
+    socket.emit('password-changed', {});
+    socket.emit('toast-msg', { text: 'Пароль изменён. Ключи шифрования пересозданы.' });
   });
+
+  // ---------- E2E: хранение публичных чат-ключей (зашифрованных мастер-паролем клиента) ----------
+  socket.on('enc-keys-get', auth((data, cb) => {
+    const chatId = String((data && data.chatId) || '');
+    if (!chatId) { if (typeof cb === 'function') cb(null); return; }
+    if (typeof cb === 'function') cb(db.encKeys[chatId] || null);
+  }));
+
+  socket.on('enc-keys-set', auth((data) => {
+    const chatId = String((data && data.chatId) || '');
+    const rec = data && data.record;
+    if (!chatId || !rec || typeof rec !== 'object') return;
+    // разрешаем запись только участникам личного чата или комнаты
+    const userId = socket.data.userId;
+    let allowed = false;
+    if (chatId.indexOf('r_') === 0) allowed = inRoom(userId, chatId);
+    else if (chatId === 'public' || chatId === 'saved') allowed = true;
+    else allowed = !!db.users[chatId];
+    if (!allowed) return;
+    if (db.encKeys[chatId]) return; // ключ устанавливается один раз (первым участником)
+    db.encKeys[chatId] = {
+      ek: String(rec.ek || '').slice(0, 200),
+      salt: String(rec.salt || '').slice(0, 64),
+      by: userId
+    };
+    save();
+    io.emit('enc-keys-updated', { chatId, record: db.encKeys[chatId] });
+  }));
 });
 
 server.listen(PORT, () => console.log('Pulse listening on ' + PORT));
