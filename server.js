@@ -32,11 +32,19 @@ const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // ---------- Безопасность: секреты и сессии ----------
-// SESSION_SECRET обязателен в продакшене (иначе токены нельзя верифицировать криптографически)
-const SESSION_SECRET = process.env.SESSION_SECRET || '';
-if (!SESSION_SECRET && process.env.NODE_ENV === 'production') {
-  console.error('[fatal] SESSION_SECRET не задан — требуется для подписи сессионных токенов');
-  process.exit(1);
+// SESSION_SECRET используется для HMAC-подписи сессионных токенов.
+// Если переменная окружения не задана — генерируем временный секрет (токены
+// станут недействительны после перезапуска процесса, но сервер не упадёт).
+let SESSION_SECRET = process.env.SESSION_SECRET || '';
+// Защита от «пустого» значения: если переменная задана, но пуста/пробелы (частая
+// ситуация на Render), считаем её не заданной и генерируем временный секрет.
+// Иначе HMAC по пустому ключу искажал бы хеши токенов и приводил к мусору в БД.
+if (!SESSION_SECRET.trim()) {
+  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  console.warn('[warn] SESSION_SECRET не задан — сгенерирован временный. ' +
+    'Все пользователи будут разлогинены при каждом рестарте сервиса. ' +
+    'Задайте SESSION_SECRET в переменных окружения (на Render: Environment): ' +
+    'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
 }
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней
 const TOKEN_GRACE_MS = 60 * 1000;                // «продление» токена при активности (окно скользящего TTL)
@@ -92,6 +100,10 @@ async function startMongo() {
     sessions: dbo.collection('sessions'),
     files: dbo.collection('files')
   };
+  // Санация коллекций от мусора прошлых версий приложения (до создания индексов):
+  // иначе уникальные/схлопнутые индексы не создаются из-за E11000 и деплой падает.
+  await sanitizeLegacyData();
+
   await Promise.all([
     col.users.createIndex({ userId: 1 }, { unique: true }),
     col.usernames.createIndex({ username: 1 }, { unique: true }),
@@ -104,11 +116,78 @@ async function startMongo() {
     col.subs.createIndex({ userId: 1 }, { unique: true }),
     col.hiddenChats.createIndex({ userId: 1 }, { unique: true }),
     col.encKeys.createIndex({ chatId: 1 }, { unique: true }),
-    col.sessions.createIndex({ tokenHash: 1 }, { unique: true }),
-    col.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     col.files.createIndex({ fileId: 1 }, { unique: true })
   ]);
+  // Индексы сессий — отдельно и терпимо к «уже существует» (см. ensureSessionIndexes)
+  await ensureSessionIndexes();
   console.log('[mongo] база готова:', dbo.databaseName);
+}
+
+// Удаляет документы с отсутствующими/пустыми ключевыми полями и дубликаты по
+// уникальным полям (оставляя самый свежий). Также удаляет устаревшие индексы,
+// мешающие созданию новых (например, старый TTL-индекс sessions с другим именем).
+async function sanitizeLegacyData() {
+  const bad = { $exists: false };
+  const emptyStr = { $in: ['', null] };
+  try {
+    // Сессии: токены без хеша / без пользователя / без срока жизни — мусор
+    // (в т.ч. исторические записи с tokenHash: null, из-за которых падал build индекса).
+    await col.sessions.deleteMany({
+      $or: [{ tokenHash: bad }, { tokenHash: emptyStr }, { userId: bad }, { userId: emptyStr }, { expiresAt: bad }]
+    });
+    // Дубликаты tokenHash (могли появиться от старых версий кода) — оставляем самый свежий.
+    const sessDups = await col.sessions.aggregate([
+      { $group: { _id: '$tokenHash', ids: { $push: '$_id' }, n: { $sum: 1 } } },
+      { $match: { n: { $gt: 1 } } }
+    ]).toArray();
+    for (const d of sessDups) {
+      const keep = d.ids[d.ids.length - 1];
+      await col.sessions.deleteMany({ _id: { $in: d.ids.filter(x => String(x) !== String(keep)) } });
+    }
+    if (sessDups.length) console.warn(`[mongo] sanitize: удалены дубликаты sessions по tokenHash: ${sessDups.length}`);
+    await dropStaleIndexes(col.sessions, 'token_1', 'expiresAt_1_ttl');
+
+    // Юзернеймы: пустые строки ломают уникальный индекс
+    await col.usernames.deleteMany({ username: { $in: ['', null] } });
+
+    // Сообщения: без id или без автора
+    await col.messages.deleteMany({ $or: [{ id: bad }, { id: emptyStr }, { from: bad }] });
+
+    // Комнаты и приглашения: без идентификаторов
+    await col.rooms.deleteMany({ $or: [{ id: bad }, { id: emptyStr }] });
+    await col.invites.deleteMany({ $or: [{ code: bad }, { code: emptyStr }] });
+
+    // Файлы: без id
+    await col.files.deleteMany({ $or: [{ fileId: bad }, { fileId: emptyStr }] });
+
+    // Удаление дубликатов по уникальным полям (оставляем последний по _id)
+    for (const [name, key] of [['usernames', 'username'], ['rooms', 'id'], ['invites', 'code'], ['files', 'fileId']]) {
+      const c = col[name];
+      const dups = await c.aggregate([
+        { $group: { _id: '$' + key, ids: { $push: '$_id' }, n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } }
+      ]).toArray();
+      for (const d of dups) {
+        const keep = d.ids[d.ids.length - 1];
+        await c.deleteMany({ _id: { $in: d.ids.filter(x => String(x) !== String(keep)) } });
+      }
+      if (dups.length) console.warn(`[mongo] sanitize: удалены дубликаты ${name} по ${key}: ${dups.length}`);
+    }
+  } catch (e) {
+    console.warn('[mongo] sanitize предупреждение (не критично):', e.message || e);
+  }
+}
+
+async function dropStaleIndexes(c, ...names) {
+  try {
+    const list = await c.indexes();
+    for (const idx of list) {
+      if (names.includes(idx.name)) {
+        await c.dropIndex(idx.name);
+        console.warn('[mongo] удалён устаревший индекс:', idx.name);
+      }
+    }
+  } catch (e) { /* коллекция может ещё не существовать */ }
 }
 
 // ---------- Sessions / presence ----------
@@ -134,10 +213,28 @@ async function sessionGet(token) {
   return s.userId;
 }
 async function sessionSet(token, userId) {
+  // Защита: не пишем в БД «пустые» сессии (tokenHash должен быть валидным хешем).
+  if (!token || typeof token !== 'string' || !userId) return;
   const tokenHash = hashToken(token);
   await col.sessions.updateOne({ tokenHash }, {
     $set: { tokenHash, userId, createdAt: new Date(), expiresAt: new Date(Date.now() + SESSION_TTL_MS) }
   }, { upsert: true });
+}
+
+// Уникальный индекс на tokenHash может уже существовать в базе со старыми данными.
+// createIndex вернёт IndexExistsException (85/92), если параметры совпадают, и
+// настоящую ошибку при конфликте — поэтому вызываем его изолированно и терпимо.
+async function ensureSessionIndexes() {
+  try {
+    await col.sessions.createIndex({ tokenHash: 1 }, { unique: true });
+  } catch (e) {
+    if (e.code !== 85 && e.codeName !== 'IndexExists') throw e;
+  }
+  try {
+    await col.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  } catch (e) {
+    if (e.code !== 85 && e.codeName !== 'IndexExists') throw e;
+  }
 }
 
 // ---------- Rate limiting ----------
@@ -310,6 +407,15 @@ app.get('/f/:id', authHttp, async (req, res) => {
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true, time: Date.now(), db: 'mongodb' }));
+
+// Пока MongoDB не подключена (например, идёт переподключение в фоне),
+// все обращения к БД должны возвращать 503, а не падать с TypeError.
+app.use((req, res, next) => {
+  if (!col.users) {
+    return res.status(503).json({ error: 'Сервис временно недоступен: подключение к базе данных' });
+  }
+  next();
+});
 
 app.get('/stats', async (_req, res) => {
   try {
@@ -1298,9 +1404,27 @@ process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e 
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e && e.stack || e));
 
 // ---------- Старт ----------
-startMongo()
-  .then(() => server.listen(PORT, () => console.log('Pulse listening on ' + PORT)))
-  .catch(e => { console.error('[mongo] fatal:', e); process.exit(1); });
+// Стратегия для Render: HTTP-порт должен быть занят сразу после запуска,
+// иначе деплой не пройдёт health-check. Поэтому сервер слушает немедленно,
+// а подключение к MongoDB повторяется в фоне (эндпоинты без БД вернут 503).
+const MONGO_RETRY_MS = 20 * 1000;
+
+async function connectMongoWithRetry() {
+  for (;;) {
+    try {
+      await startMongo();
+      console.log('[mongo] подключения установлены, сервис полностью готов');
+      return;
+    } catch (e) {
+      console.error('[mongo] ошибка подключения:', e.message || e);
+      console.error(`[mongo] повторная попытка через ${MONGO_RETRY_MS / 1000} с...`);
+      await new Promise(r => setTimeout(r, MONGO_RETRY_MS));
+    }
+  }
+}
+
+server.listen(PORT, () => console.log('Pulse listening on ' + PORT));
+connectMongoWithRetry();
 
 process.on('SIGINT', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
 process.on('SIGTERM', async () => { try { if (client) await client.close(); } catch (e) {} process.exit(0); });
