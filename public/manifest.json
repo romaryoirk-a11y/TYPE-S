@@ -1,65 +1,17 @@
 {
-  "id": "/?source=pwa",
-  "name": "Pulse",
+  "name": "Pulse — мессенджер",
   "short_name": "Pulse",
-  "description": "Мессенджер в ритме общения — чаты, группы, каналы, файлы и уведомления.",
+  "description": "Pulse — мессенджер в ритме общения.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "any",
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#3390ec",
   "lang": "ru",
-  "dir": "ltr",
-  "categories": ["social", "communication", "productivity"],
   "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Сохранённые",
-      "short_name": "Избранное",
-      "url": "/?open=saved",
-      "description": "Открыть сохранённые сообщения",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Найти пользователя",
-      "short_name": "Поиск",
-      "url": "/?open=search",
-      "description": "Поиск по @username",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    }
-  ],
-  "prefer_related_applications": false
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
 }
