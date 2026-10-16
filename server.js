@@ -1,8 +1,21 @@
 'use strict';
-const express = require('express');
-const http = require('http');
 const path = require('path');
 const fs = require('fs');
+// Загрузка переменных из файла .env (если существует) — до чтения process.env ниже
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split(/\r?\n/).forEach(line => {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (m && !(m[1] in process.env)) {
+        process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+      }
+    });
+  }
+} catch (e) { console.warn('[env] не удалось прочитать .env:', e.message); }
+
+const express = require('express');
+const http = require('http');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
