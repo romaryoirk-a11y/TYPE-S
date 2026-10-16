@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#dfe8bc">
-<meta name="description" content="Pulse — ретро-мессенджер в стиле Game Boy. Pixel chat, 4 shades of green.">
+<meta name="theme-color" content="#f4ecd8">
+<meta name="description" content="Pulse — ретро-мессенджер в ритме общения.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=DotGothic16&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Pulse">
@@ -147,7 +147,7 @@ input, textarea, button { font-family: inherit; }
 
 .boot { position: fixed; inset: 0; z-index: 9999; background: var(--sidebar); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; transition: opacity .4s; }
 .boot.fade-out { opacity: 0; pointer-events: none; }
-.boot-spinner { width: 40px; height: 40px; border: 3px solid rgba(255,92,57,.15); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+.boot-spinner { width: 40px; height: 40px; border: 3px solid rgba(255,92,57,,.15); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
 .boot-text { color: var(--text-dim); font-size: 13px; text-align: center; max-width: 320px; }
 .boot-hint { font-size: 12px; color: var(--text-mute); margin-top: 5px; }
 .boot-retry { margin-top: 10px; padding: 9px 20px; border: 1.5px solid var(--border); background: transparent; color: var(--text); border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; display: none; }
@@ -231,8 +231,8 @@ input, textarea, button { font-family: inherit; }
 .chat-icons { display: flex; align-items: center; gap: 3px; color: var(--icon-color); flex-shrink: 0; }
 .chat-icons .icon { width: 14px; height: 14px; stroke-width: 2; }
 
-.fab { position: absolute; bottom: 20px; right: 20px; width: 54px; height: 54px; border-radius: 50%; background: var(--accent); color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(255,92,57,.35); z-index: 15; transition: transform .15s, background .15s, box-shadow .15s; }
-.fab:hover { background: var(--accent-hover); transform: scale(1.05); box-shadow: 0 6px 18px rgba(255,92,57,.45); }
+.fab { position: absolute; bottom: 20px; right: 20px; width: 54px; height: 54px; border-radius: 50%; background: var(--accent); color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(255,92,57,,.35); z-index: 15; transition: transform .15s, background .15s, box-shadow .15s; }
+.fab:hover { background: var(--accent-hover); transform: scale(1.05); box-shadow: 0 6px 18px rgba(255,92,57,,.45); }
 
 .chat-window { flex: 1; display: flex; flex-direction: column; background: var(--chat-bg); position: relative; min-height: 0; min-width: 0; overflow: hidden; }
 .chat-window::before {
@@ -293,7 +293,7 @@ input, textarea, button { font-family: inherit; }
 .bubble.del { opacity: .55; font-style: italic; }
 
 .reply-quote { padding: 4px 8px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 5px; margin-bottom: 4px; font-size: 13px; }
-.msg-wrap.out .reply-quote { background: rgba(255,92,57,.12); border-left-color: var(--accent); }
+.msg-wrap.out .reply-quote { background: rgba(255,92,57,,.12); border-left-color: var(--accent); }
 .reply-quote .author { font-weight: 600; color: var(--accent); font-size: 13px; }
 .reply-quote .text { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
@@ -313,7 +313,7 @@ input, textarea, button { font-family: inherit; }
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: rgba(0,0,0,.06); border-radius: 12px; font-size: 14px; cursor: pointer; transition: transform .1s, background .15s; }
 [data-theme="dark"] .reaction { background: rgba(255,255,255,.1); }
-.msg-wrap.in .reaction { background: rgba(255,92,57,.12); }
+.msg-wrap.in .reaction { background: rgba(255,92,57,,.12); }
 [data-theme="dark"] .msg-wrap.in .reaction { background: var(--accent-soft); }
 .reaction:hover { transform: scale(1.08); }
 .reaction.mine { background: var(--accent); color: #fff; }
@@ -345,14 +345,14 @@ input, textarea, button { font-family: inherit; }
 .input-area { padding: 8px 14px 12px; background: var(--header-bg); display: flex; align-items: flex-end; gap: 6px; flex-shrink: 0; position: relative; z-index: 2; }
 .input-area::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--border); }
 .input-inner { flex: 1; display: flex; align-items: flex-end; background: var(--search-bg); border-radius: 20px; padding: 4px 6px 4px 14px; min-height: 40px; transition: box-shadow .15s, background .15s; }
-.input-inner:focus-within { box-shadow: 0 0 0 2px rgba(255,92,57,.25); background: var(--sidebar); }
+.input-inner:focus-within { box-shadow: 0 0 0 2px rgba(255,92,57,,.25); background: var(--sidebar); }
 .input-inner textarea { flex: 1; border: none; background: transparent; outline: none; resize: none; font-size: 14.5px; color: var(--text); line-height: 1.35; max-height: 200px; padding: 8px 0; font-family: inherit; }
 .input-inner textarea::placeholder { color: var(--text-dim); }
 .send-btn { width: 40px; height: 40px; border: none; border-radius: 50%; background: transparent; color: var(--accent); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
 .send-btn:hover { background: var(--accent-soft); }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
 .send-btn.uploading .icon { display: none; }
-.send-btn.uploading::after { content: ''; width: 16px; height: 16px; border: 2px solid rgba(255,92,57,.25); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+.send-btn.uploading::after { content: ''; width: 16px; height: 16px; border: 2px solid rgba(255,92,57,,.25); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
 .account-menu { position: absolute; inset: 0; background: var(--sidebar); z-index: 25; display: flex; flex-direction: column; transform: translateX(-100%); transition: transform .3s cubic-bezier(.4,0,.2,1); overflow-y: auto; }
 .account-menu.open { transform: translateX(0); }
@@ -435,7 +435,7 @@ input, textarea, button { font-family: inherit; }
 .member-name { font-size: 14px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 6px; transition: color .15s; }
 .member-role { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
 .member-role.owner { background: rgba(255,184,92,.18); color: #d98a2b; }
-.member-role.admin { background: rgba(255,92,57,.15); color: var(--accent); }
+.member-role.admin { background: rgba(255,92,57,,.15); color: var(--accent); }
 .member-role.member { background: var(--search-bg); color: var(--text-dim); }
 .member-actions { display: flex; gap: 4px; }
 .member-actions button { width: 30px; height: 30px; border: none; background: transparent; color: var(--icon-color); border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; }
@@ -661,178 +661,6 @@ input, textarea, button { font-family: inherit; }
   .msg-wrap { max-width: 88%; }
   .bubble { font-size:17px; }
 }
-
-/* ══════ RETRO TG-92 · GAME BOY EDITION ══════ */
-@import url('https://fonts.googleapis.com/css2?family=DotGothic16&family=Silkscreen:wght@400;700&display=swap');
-
-:root, [data-theme="light"] {
-  --gb-green-1: #dfe8bc;   /* фон экрана */
-  --gb-green-2: #8bac0f;   /* основной зелёный */
-  --gb-green-3: #306230;   /* тёмный зелёный (текст/рамки) */
-  --gb-green-4: #0f380f;   /* самый тёмный */
-  --gb-pea:     #ffcd75;   /* жёлтый горошек (акцент) */
-  --bg: var(--gb-green-1);
-  --paper: #e6eebb;
-  --sidebar: #d7e3a4;
-  --sidebar-hover: #c3d489;
-  --sidebar-active: #306230;
-  --chat-bg: #b7c96e;
-  --in-bg: #eef4c6;
-  --in-text: #0f380f;
-  --out-bg: #8bac0f;
-  --out-text: #0f380f;
-  --header-bg: #d7e3a4;
-  --border: #0f380f;
-  --border-light: #8bac0f;
-  --text: #0f380f;
-  --text-dim: #306230;
-  --text-mute: #5a7a2c;
-  --accent: #306230;
-  --accent-hover: #4a7a34;
-  --accent-soft: rgba(48,98,48,.16);
-  --danger: #a83300;
-  --search-bg: #e6eebb;
-  --input-inner: #eef4c6;
-  --scrollbar: #8bac0f;
-  --toast-bg: #0f380f;
-  --icon-color: #306230;
-  --read-tick: #0f380f;
-  --switch-off: #9db35a;
-  --font-pixel: 'Silkscreen', 'Press Start 2P', monospace;
-  --font-term: 'DotGothic16', 'VT323', monospace;
-  --chat-pattern: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' fill='%230f380f' opacity='0.03'/><rect x='0' y='0' width='8' height='8' fill='%230f380f' opacity='0.05'/><rect x='8' y='8' width='8' height='8' fill='%230f380f' opacity='0.05'/><rect x='3' y='11' width='2' height='2' fill='%230f380f' opacity='0.07'/><rect x='11' y='3' width='2' height='2' fill='%230f380f' opacity='0.07'/></svg>");
-}
-[data-theme="dark"] {
-  --gb-green-1: #0f380f;
-  --gb-green-2: #8bac0f;
-  --gb-green-3: #9bbc0f;
-  --gb-green-4: #e6eebb;
-  --bg: #0a1c0a;
-  --paper: #10300f;
-  --sidebar: #0f380f;
-  --sidebar-hover: #1c4a18;
-  --sidebar-active: #306230;
-  --chat-bg: #0a1f0a;
-  --in-bg: #16421a;
-  --in-text: #c8dc7a;
-  --out-bg: #306230;
-  --out-text: #e6eebb;
-  --header-bg: #0f380f;
-  --border: #9bbc0f;
-  --border-light: #306230;
-  --text: #c8dc7a;
-  --text-dim: #8bac0f;
-  --text-mute: #5f7a35;
-  --accent: #8bac0f;
-  --accent-hover: #a3c427;
-  --accent-soft: rgba(139,172,15,.18);
-  --danger: #ff5b4a;
-  --search-bg: #10300f;
-  --input-inner: #10300f;
-  --scrollbar: #306230;
-  --toast-bg: #06140a;
-  --icon-color: #8bac0f;
-  --read-tick: #a3c427;
-  --switch-off: #306230;
-  --pixel-shadow: 3px 3px 0 rgba(0,0,0,.85);
-  --pixel-shadow-sm: 2px 2px 0 rgba(0,0,0,.85);
-  --chat-pattern: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' fill='%239bbc0f' opacity='0.02'/><rect x='0' y='0' width='8' height='8' fill='%239bbc0f' opacity='0.04'/><rect x='8' y='8' width='8' height='8' fill='%239bbc0f' opacity='0.04'/><rect x='3' y='11' width='2' height='2' fill='%239bbc0f' opacity='0.05'/><rect x='11' y='3' width='2' height='2' fill='%239bbc0f' opacity='0.05'/></svg>");
-}
-
-* { font-family: 'DotGothic16', 'VT323', monospace; }
-.pixel-font, .boot-logo, .empty-chat-title { font-family: 'Silkscreen', 'Press Start 2P', monospace !important; }
-
-body { background: var(--chat-bg); letter-spacing: .3px; }
-/* CRT: сканлайны + виньетка + лёгкое свечение люмофора */
-body::after {
-  background: repeating-linear-gradient(0deg, rgba(15,56,15,.10) 0 1px, transparent 1px 3px);
-  box-shadow: inset 0 0 120px rgba(15,56,15,.28);
-}
-[data-theme="dark"] body::after {
-  background: repeating-linear-gradient(0deg, rgba(0,0,0,.34) 0 1px, transparent 1px 3px);
-  box-shadow: inset 0 0 140px rgba(0,0,0,.6), inset 0 0 40px rgba(155,188,15,.06);
-}
-
-/* Boot — как включение консоли */
-.boot { background: var(--gb-green-1); }
-[data-theme="dark"] .boot { background: var(--bg); }
-.boot-logo { color: var(--gb-green-3); text-shadow: 4px 4px 0 var(--gb-green-4), -2px -2px 0 rgba(255,255,255,.25); animation: crtFlicker 1.8s steps(2,end) infinite, bootJump 1.2s steps(3,end) 1; }
-@keyframes bootJump { 0%{ transform:translateY(-40px); opacity:0 } 60%{ transform:translateY(4px) } 100%{ transform:none; opacity:1 } }
-.boot-text::before { content:'▓▒░ '; color:var(--accent); }
-
-/* Пиксельные рамки: двойная граница через outline-offset */
-.modal-card, .edit-modal, .context-menu, .reactions-bar, .toast, .stat-card, .msg-file,
-.input-inner, .search-input-wrap, .search-field, .type-option, .pending-inner, .reply-preview-inner {
-  border: 3px solid var(--border) !important;
-  outline: 2px solid var(--border);
-  outline-offset: 2px;
-  background: var(--paper);
-}
-.toast { border-color: var(--border) !important; color: var(--gb-green-4); background: var(--toast-bg); }
-[data-theme="dark"] .toast { color: var(--gb-green-1); }
-
-.primary-btn, .result-action, .user-profile-btn, .edit-actions button, .fab, .boot-retry {
-  font-family: 'Silkscreen','Press Start 2P',monospace;
-  text-transform: uppercase;
-}
-.primary-btn:hover, .fab:hover, .result-action:hover { filter: brightness(1.08); }
-
-/* Скроллбар — пиксельный «жёлоб» */
-::-webkit-scrollbar-track { background: var(--gb-green-1); border-left: 2px solid var(--border-light); }
-::-webkit-scrollbar-thumb { background: var(--scrollbar); border: 2px solid var(--border); }
-
-/* Чат-лист: активный чат — «выбранная ячейка» */
-.chat-item.active { background: var(--sidebar-active); box-shadow: inset 0 0 0 2px var(--border), inset -4px 0 0 var(--gb-pea); }
-.chat-avatar { image-rendering: pixelated; }
-.section-header { color: var(--gb-green-3); }
-[data-theme="dark"] .section-header { color: var(--text-dim); }
-.chat-badge { background: var(--gb-pea); color: var(--gb-green-4); }
-
-/* Сообщения: ступенчатые «пиксель-хвосты» пузырей */
-.msg-wrap.group-end.in .bubble::before { display:block !important; content:'' !important; position:absolute; left:-8px; bottom:0; width:8px; height:8px;
-  background: var(--in-bg); clip-path: polygon(100% 0, 100% 100%, 0 100%) !important; }
-.msg-wrap.group-end.out .bubble::before { display:block !important; content:'' !important; position:absolute; right:-8px; bottom:0; width:8px; height:8px;
-  background: var(--out-bg); clip-path: polygon(0 0, 0 100%, 100% 100%) !important; }
-.bubble { border-width: 2px !important; }
-.msg-wrap.out .bubble { background: var(--out-bg); color: var(--out-text); }
-.sender-name { color: var(--gb-green-2); }
-[data-theme="light"] .sender-name { color: #4a7a34; }
-.reaction.mine { background: var(--gb-pea); color: var(--gb-green-4); border-color: var(--border); }
-
-/* Индикатор набора текста — мигающий курсор терминала */
-.typing-indicator span { background: var(--gb-green-3); animation: gbCursor .8s steps(1,end) infinite; }
-.typing-indicator span:nth-child(2){ animation-delay:.15s } .typing-indicator span:nth-child(3){ animation-delay:.3s }
-[data-theme="dark"] .typing-indicator span { background: var(--gb-pea); }
-
-/* Кнопка отправки — «кнопка A» */
-.send-btn { color: var(--gb-green-3); }
-.send-btn:hover { background: var(--gb-pea); box-shadow: inset 0 0 0 2px var(--border); color: var(--gb-green-4); }
-.fab { background: var(--gb-pea); color: var(--gb-green-4); }
-
-/* Заголовок окна чата — полоса с «ромбами» */
-.chat-header { border-bottom: 3px double var(--border); }
-.pinned-bar { background: var(--accent-soft); }
-
-/* Профиль / About — как карточка персонажа */
-.about-logo { background: var(--gb-green-2); color: var(--gb-green-4); }
-.account-profile { border-bottom-style: double; border-bottom-width: 6px; }
-.member-role.owner { color: var(--gb-pea); background: rgba(255,205,117,.2); }
-.stat-value { color: var(--gb-green-2); }
-[data-theme="light"] .stat-value { color: var(--gb-green-3); }
-
-/* Онлайн-статус — мигающий светодиод */
-.chat-avatar .status { background: var(--gb-green-2); animation: ledBlink 2.4s steps(2,end) infinite; }
-.chat-avatar .status.offline { background: var(--text-mute); animation: none; }
-@keyframes ledBlink { 0%,100%{opacity:1} 50%{opacity:.55} }
-
-/* Поиск и оверлеи меню — в тон корпуса Game Boy */
-.account-menu, .search-overlay { background: var(--gb-green-1); }
-[data-theme="dark"] .account-menu, [data-theme="dark"] .search-overlay { background: var(--bg); }
-.account-divider, .account-profile { border-color: var(--border-light) !important; }
-
-/* Превью файлов — как «картридж» */
-.msg-file .fi { color: var(--gb-green-3); }
-[data-theme="dark"] .msg-file .fi { color: var(--gb-pea); }
 </style>
 </head>
 <body>
@@ -840,7 +668,7 @@ body::after {
 <div class="boot" id="bootScreen">
   <div class="boot-logo">PULSE</div>
   <div class="boot-spinner"></div>
-  <div class="boot-text">v2.1 · RETRO TG-92 GAME BOY EDITION<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
+  <div class="boot-text">v2.0 · RETRO EDITION<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
   <button class="boot-retry" id="bootRetry" onclick="location.reload()">Перезагрузить</button>
 </div>
 
@@ -1120,9 +948,9 @@ body::after {
       <div class="about-content">
         <div class="about-logo">💬</div>
         <div class="about-title">Pulse</div>
-        <div class="about-version">Версия 2.1 · RETRO TG-92 (Game Boy Edition)</div>
+        <div class="about-version">Версия 1.0.0</div>
         <div class="about-text">
-          Pulse — мессенджер в стиле пиксельной консоли: 4 оттенка зелёного, CRT-сканлайны и шрифты DotGothic16/Silkscreen. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
+          Pulse — мессенджер в ритме общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
           <b>Возможности:</b><br>
           • Личные чаты и группы<br>
           • Каналы для публикаций<br>
@@ -1385,8 +1213,7 @@ function fallbackCopy(text) {
   } catch(e) { toast(t('error')); }
 }
 
-// Пиксельная ретро-палитра (Game Boy / NES)
-var ACCENTS = ['#8bac0f','#ffcd75','#306230','#5a7a2c','#a83300','#3b5dc9','#9b3ba8','#e6eebb'];
+var ACCENTS = ['#ff5c39','#ffd94a','#4caf6d','#3bc9db','#ff5cb8','#8774e1','#ff8a3c','#e8425a'];
 
 var socket = null;
 var me = null, sessionToken = null;
@@ -1467,11 +1294,11 @@ function lockIconHtml(){ return '<span title="Сквозное шифрован�
 
 function applyTheme() {
   document.documentElement.setAttribute('data-theme', settings.theme || 'light');
-  var isDefaultAccent = !settings.accent || ['#ff5c39','#3390ec','#306230'].indexOf(settings.accent) >= 0;
+  var isDefaultAccent = !settings.accent || ['#ff5c39','#3390ec'].indexOf(settings.accent) >= 0;
   if (isDefaultAccent) document.documentElement.style.removeProperty('--accent');
   else document.documentElement.style.setProperty('--accent', settings.accent);
   var meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', settings.theme === 'dark' ? '#0f380f' : '#dfe8bc');
+  if (meta) meta.setAttribute('content', settings.theme === 'dark' ? '#12100c' : '#f4ecd8');
 }
 function applyLang() { LANG = settings.language || 'ru'; document.documentElement.lang = LANG; }
 function saveMe(){ try{ localStorage.setItem('messenger_me', JSON.stringify(me)); }catch(e){} }
@@ -1987,9 +1814,8 @@ function registerSocket() {
   socket.on('connect', function(){
     connected = true;
     if (me && sessionToken) socket.emit('auto-login',{userId:me.userId,token:sessionToken});
-    updateHeader(); renderChats();
   });
-  socket.on('disconnect', function(){ connected = false; updateHeader(); renderChats(); });
+  socket.on('disconnect', function(){ connected = false; });
   socket.io.on('reconnect', function(){ toast(t('connection_restored')); });
 
   socket.on('auth-error', function(data){
@@ -2397,12 +2223,6 @@ function renderChats() {
       pv.innerHTML += '<span>' + esc(previewOf(lm)) + '</span>';
       if (mutedChats.indexOf(opts.id) >= 0) pv.innerHTML += '<span class="chat-icons">' + ICONS.bellOff + '</span>';
       if (lm.pinned) pv.innerHTML += '<span class="chat-icons">' + ICONS.pin + '</span>';
-    } else if (!connected) {
-      // Ретро-«нет сигнала» для пустых чатов при обрыве связи
-      var noSig = document.createElement('span');
-      noSig.style.cssText = 'color:var(--text-mute);letter-spacing:2px';
-      noSig.textContent = LANG === 'ru' ? '· · · нет сигнала' : '· · · no signal';
-      pv.appendChild(noSig);
     }
     bot.appendChild(pv);
     info.appendChild(bot);
@@ -2515,7 +2335,7 @@ function updateHeader() {
 
   if (currentRoom === 'public') {
     nm.textContent = t('public_chat');
-    stt.textContent = (connected ? '' : '⚠ OFFLINE · ') + onlineCountText();
+    stt.textContent = onlineCountText();
     av.innerHTML = ICONS.globe;
     addAct(ICONS.group, t('members_word_plural'), function(){ showPublicMembers(); });
   } else if (currentRoom === 'saved') {
@@ -2564,7 +2384,7 @@ function updateHeader() {
       }
     } else {
       nm.textContent = u.name;
-      stt.textContent = (u.online ? '● ' + t('online') : t('offline')) + (connected ? '' : ' · OFFLINE');
+      stt.textContent = u.online ? t('online') : t('offline');
       if (u.avatar && safeUrl(u.avatar)) { av.style.background = '#000'; av.innerHTML = ''; var imH = document.createElement('img'); imH.src = safeUrl(u.avatar); imH.alt = ''; av.appendChild(imH); }
       else { av.style.background = u.color; av.textContent = u.initials || '?'; }
       av.style.cursor = 'pointer';
