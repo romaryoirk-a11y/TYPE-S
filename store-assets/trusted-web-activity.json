@@ -1,0 +1,8 @@
+{
+  "package_name": "com.pulse.messenger",
+  "activity_name": "TWAActivity",
+  "quick_link_verification_mode": "prompt",
+  "app_name": "Pulse",
+  "web_app_manifest": "https://ВАШ-ДОМЕН.onrender.com/manifest.json",
+  "max_timeout_ms": "10000"
+}
