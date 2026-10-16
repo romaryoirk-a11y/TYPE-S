@@ -732,6 +732,390 @@ io.on('connection', socket => {
     } catch (e) {}
   });
 
+  socket.on('typing', ({ to, from, fromName }) => {
+    try {
+      if (!to || !from) return;
+      if (to === 'saved') return;
+      let recipients;
+      if (to === 'public') recipients = allUserIds().filter(u => u !== from);
+      else if (typeof to === 'string' && to.startsWith('r_')) recipients = ((rooms[to] && rooms[to].members) || []).filter(u => u !== from);
+      else recipients = [to];
+      emitToUsers(recipients, 'typing', { to, from, fromName });
+    } catch (e) {}
+  });
+
+  socket.on('create-room', async ({ name, type, description, creator, inviteUsernames }) => {
+    try {
+      if (!name || !type || !creator) return;
+      if (type !== 'group' && type !== 'channel') return;
+      const id = 'r_' + crypto.randomBytes(6).toString('hex');
+      const COLORS = [
+        ['#3390ec','#8774e1'], ['#ff5c8a','#ff8a5c'], ['#5cffb8','#5c9dff'],
+        ['#ffb85c','#ff5c5c'], ['#5cffd9','#5c7cff'], ['#b85cff','#ff5cb8']
+      ];
+      const c = COLORS[Math.floor(Math.random() * COLORS.length)];
+      const members = [creator];
+      const roles = { [creator]: 'owner' };
+      if (Array.isArray(inviteUsernames)) {
+        for (const un of inviteUsernames) {
+          const clean = safeUsername(un).toLowerCase();
+          if (!clean) continue;
+          const found = Object.entries(knownUsers).find(([id2, u]) =>
+            id2 !== creator && u.username && u.username.toLowerCase() === clean
+          );
+          if (found && !members.includes(found[0])) {
+            members.push(found[0]);
+            roles[found[0]] = 'member';
+            await ensureContacts(creator, found[0]);
+          }
+        }
+      }
+      rooms[id] = {
+        id, type,
+        name: name.slice(0, 60),
+        description: (description || '').slice(0, 200),
+        color: `linear-gradient(135deg,${c[0]},${c[1]})`,
+        createdBy: creator, createdAt: Date.now(),
+        members, roles,
+        pinnedMessages: []
+      };
+      await saveRoom(id);
+      broadcastRooms();
+      socket.emit('room-created', rooms[id]);
+    } catch (e) {}
+  });
+
+  socket.on('invite-to-room', async ({ roomId, byUserId, usernames }) => {
+    try {
+      const room = rooms[roomId];
+      if (!room) return;
+      const role = getUserRole(room, byUserId);
+      if (!canManage(role)) return socket.emit('error-msg', { text: 'Только админы могут приглашать' });
+      const added = [];
+      for (const un of (usernames || [])) {
+        const clean = safeUsername(un).toLowerCase();
+        if (!clean) continue;
+        const found = Object.entries(knownUsers).find(([id, u]) => u.username && u.username.toLowerCase() === clean);
+        if (found && !room.members.includes(found[0])) {
+          room.members.push(found[0]);
+          if (!room.roles) room.roles = {};
+          room.roles[found[0]] = 'member';
+          added.push('@' + found[1].username);
+          await ensureContacts(byUserId, found[0]);
+        }
+      }
+      if (added.length) {
+        await saveRoom(roomId);
+        broadcastRooms();
+        socket.emit('invited', { names: added });
+      } else {
+        socket.emit('error-msg', { text: 'Никто не добавлен' });
+      }
+    } catch (e) {}
+  });
+
+  socket.on('create-invite', async ({ roomId, byUserId }) => {
+    try {
+      const room = rooms[roomId];
+      if (!room) return;
+      const role = getUserRole(room, byUserId);
+      if (!canManage(role)) return socket.emit('error-msg', { text: 'Нет прав' });
+      const code = crypto.randomBytes(5).toString('hex');
+      await invitesCol.insertOne({ code, roomId, createdBy: byUserId, createdAt: Date.now(), uses: 0 });
+      socket.emit('invite-created', { code, roomId, link: '/join/' + code });
+    } catch (e) { console.error('create-invite:', e); }
+  });
+
+  socket.on('redeem-invite', async ({ code, userId }) => {
+    try {
+      const inv = await invitesCol.findOne({ code });
+      if (!inv) return socket.emit('invite-error', { text: 'Приглашение не найдено' });
+      const room = rooms[inv.roomId];
+      if (!room) return socket.emit('invite-error', { text: 'Комната не найдена' });
+      if (room.members.includes(userId)) {
+        socket.emit('invite-redeemed', { roomId: room.id, alreadyMember: true });
+        return;
+      }
+      room.members.push(userId);
+      if (!room.roles) room.roles = {};
+      room.roles[userId] = 'member';
+      await saveRoom(room.id);
+      await invitesCol.updateOne({ code }, { $inc: { uses: 1 } });
+      await ensureContacts(inv.createdBy, userId);
+      broadcastRooms();
+      socket.emit('invite-redeemed', { roomId: room.id, alreadyMember: false });
+      socket.emit('toast-msg', { text: '✅ Вы присоединились к "' + room.name + '"' });
+    } catch (e) { console.error('redeem-invite:', e); }
+  });
+
+  socket.on('set-role', async ({ roomId, byUserId, targetUserId, role }) => {
+    try {
+      const room = rooms[roomId];
+      if (!room) return;
+      const myRole = getUserRole(room, byUserId);
+      if (myRole !== 'owner') return socket.emit('error-msg', { text: 'Только владелец может менять роли' });
+      if (targetUserId === byUserId) return socket.emit('error-msg', { text: 'Нельзя сменить свою роль' });
+      if (!room.members.includes(targetUserId)) return;
+      if (!['admin', 'member'].includes(role)) return;
+      if (!room.roles) room.roles = {};
+      room.roles[targetUserId] = role;
+      await saveRoom(roomId);
+      broadcastRooms();
+      socket.emit('toast-msg', { text: '✅ Роль обновлена' });
+    } catch (e) {}
+  });
+
+  socket.on('kick-user', async ({ roomId, byUserId, targetUserId }) => {
+    try {
+      const room = rooms[roomId];
+      if (!room) return;
+      const myRole = getUserRole(room, byUserId);
+      if (!canKick(myRole)) return socket.emit('error-msg', { text: 'Нет прав' });
+      const targetRole = getUserRole(room, targetUserId);
+      if (targetRole === 'owner') return socket.emit('error-msg', { text: 'Нельзя исключить владельца' });
+      if (myRole === 'admin' && targetRole === 'admin') return socket.emit('error-msg', { text: 'Админ не может исключить админа' });
+      room.members = room.members.filter(x => x !== targetUserId);
+      if (room.roles) delete room.roles[targetUserId];
+      await saveRoom(roomId);
+      broadcastRooms();
+      socket.emit('toast-msg', { text: '✅ Пользователь исключён' });
+    } catch (e) {}
+  });
+
+  socket.on('join-room', async ({ roomId, userId }) => {
+    try {
+      const r = rooms[roomId];
+      if (!r || !Array.isArray(r.members) || r.members.includes(userId)) return;
+      r.members.push(userId);
+      if (!r.roles) r.roles = {};
+      r.roles[userId] = 'member';
+      await saveRoom(roomId);
+      broadcastRooms();
+    } catch (e) {}
+  });
+
+  socket.on('leave-room', async ({ roomId, userId }) => {
+    try {
+      const r = rooms[roomId];
+      if (!r) return;
+      if (getUserRole(r, userId) === 'owner') {
+        return socket.emit('error-msg', { text: 'Владелец не может покинуть — передайте права или удалите' });
+      }
+      r.members = r.members.filter(x => x !== userId);
+      if (r.roles) delete r.roles[userId];
+      if (r.members.length === 0) { delete rooms[roomId]; await deleteRoom(roomId); }
+      else await saveRoom(roomId);
+      broadcastRooms();
+    } catch (e) {}
+  });
+
+  socket.on('disconnect', () => {
+    try {
+      if (socket.userId && online.has(socket.userId)) {
+        online.get(socket.userId).delete(socket.id);
+        if (online.get(socket.userId).size === 0) online.delete(socket.userId);
+        broadcastUserLists();
+      }
+    } catch (e) {}
+  });
+});
+
+process.on('uncaughtException', err => console.error('❌ uncaughtException:', err));
+process.on('unhandledRejection', err => console.error('❌ unhandledRejection:', err));
+
+const PORT = process.env.PORT || 3000;
+
+(async function start() {
+  try {
+    await initDB();
+    await initVapid();
+    await loadData();
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n🚀 Pulse запущен на порту ${PORT}\n`);
+    });
+  } catch (e) {
+    console.error('❌ Критическая ошибка:', e);
+    process.exit(1);
+  }
+})();
+
+process.on('SIGTERM', async () => {
+  try { await mongoClient.close(); } catch (e) {}
+  server.close(() => process.exit(0));
+}); = [msg.from];
+      else if (isRoom) {
+        if (!Array.isArray(room.members) || !room.members.includes(msg.from)) return;
+        recipients = room.members.slice();
+      } else recipients = [msg.to, msg.from];
+
+      const ts = msg.timestamp || Date.now();
+      const full = {
+        id: msg.id, to: msg.to, from: msg.from, fromName: msg.fromName,
+        text: String(msg.text || '').slice(0, 4000),
+        file: msg.file || null,
+        replyTo: msg.replyTo || null,
+        reactions: {}, edited: false, deleted: false, pinned: false,
+        timestamp: ts,
+        time: new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        deliveredTo: [], readBy: []
+      };
+      messages.push(full);
+      if (messages.length > 10000) messages = messages.slice(-10000);
+      saveMessage(full);
+      emitToUsers(recipients, 'message', full);
+
+      recipients.forEach(uid => {
+        if (uid === msg.from) return;
+        if (!online.has(uid)) {
+          const title = isPublic ? '🌐 Общий чат'
+            : isRoom ? (room.type === 'channel' ? `📢 ${room.name}` : `👥 ${room.name}`)
+            : isSaved ? '💾 Сохранённые'
+            : `💬 ${msg.fromName}`;
+          const body = msg.file ? (msg.text ? msg.text.slice(0, 80) + ' 📎' : '📎 ' + msg.file.name) : msg.text.slice(0, 120);
+          sendPush(uid, { title: 'Pulse · ' + title, body, data: { roomId: msg.to }, tag: msg.to });
+        }
+      });
+    } catch (e) { console.error('message:', e); }
+  });
+
+  socket.on('edit-message', async ({ messageId, userId, newText }) => {
+    try {
+      const m = messages.find(x => x.id === messageId);
+      if (!m || m.from !== userId || m.deleted) return;
+      if (Date.now() - m.timestamp > 24 * 60 * 60 * 1000) return socket.emit('error-msg', { text: 'Можно редактировать в течение 24 часов' });
+      const text = String(newText || '').slice(0, 4000);
+      if (!text) return;
+      m.text = text; m.edited = true; m.editedAt = Date.now();
+      await updateMessage(m.id, { text: m.text, edited: true, editedAt: m.editedAt });
+      emitToUsers(messageRecipients(m), 'message-update', m);
+    } catch (e) {}
+  });
+
+  socket.on('delete-message', async ({ messageId, userId }) => {
+    try {
+      const m = messages.find(x => x.id === messageId);
+      if (!m || m.from !== userId || m.deleted) return;
+      m.deleted = true; m.text = ''; m.file = null; m.reactions = {};
+      await updateMessage(m.id, { deleted: true, text: '', file: null, reactions: {} });
+      emitToUsers(messageRecipients(m), 'message-update', m);
+    } catch (e) {}
+  });
+
+  socket.on('react-message', async ({ messageId, userId, emoji }) => {
+    try {
+      const m = messages.find(x => x.id === messageId);
+      if (!m || m.deleted) return;
+      const validEmojis = ['👍','❤️','😂','😮','😢','🔥'];
+      if (!validEmojis.includes(emoji)) return;
+      if (!m.reactions) m.reactions = {};
+      if (!m.reactions[emoji]) m.reactions[emoji] = [];
+      const idx = m.reactions[emoji].indexOf(userId);
+      if (idx >= 0) m.reactions[emoji].splice(idx, 1);
+      else m.reactions[emoji].push(userId);
+      if (m.reactions[emoji].length === 0) delete m.reactions[emoji];
+      await updateMessage(m.id, { reactions: m.reactions });
+      emitToUsers(messageRecipients(m), 'message-update', m);
+    } catch (e) {}
+  });
+
+  socket.on('pin-message', async ({ messageId, userId }) => {
+    try {
+      const m = messages.find(x => x.id === messageId);
+      if (!m || !m.to) return;
+      const isRoom = m.to.startsWith('r_');
+      const isPublic = m.to === 'public';
+      if (!isRoom && !isPublic) return;
+
+      let room;
+      if (isRoom) {
+        room = rooms[m.to];
+        if (!room) return;
+        const role = getUserRole(room, userId);
+        if (!canPin(role)) return socket.emit('error-msg', { text: 'Нет прав закреплять' });
+      }
+      m.pinned = !m.pinned;
+      await updateMessage(m.id, { pinned: m.pinned });
+
+      if (isRoom && room) {
+        if (!Array.isArray(room.pinnedMessages)) room.pinnedMessages = [];
+        if (m.pinned && !room.pinnedMessages.includes(m.id)) {
+          room.pinnedMessages.push(m.id);
+          if (room.pinnedMessages.length > 20) room.pinnedMessages = room.pinnedMessages.slice(-20);
+        } else if (!m.pinned) {
+          room.pinnedMessages = room.pinnedMessages.filter(x => x !== m.id);
+        }
+        await saveRoom(room.id);
+        io.emit('rooms', Object.values(rooms));
+      }
+      emitToUsers(messageRecipients(m), 'message-update', m);
+      socket.emit('toast-msg', { text: m.pinned ? '📌 Закреплено' : '📌 Откреплено' });
+    } catch (e) { console.error('pin-message:', e); }
+  });
+
+  socket.on('mute-chat', async ({ userId, chatId, muted }) => {
+    try {
+      if (!userId || !chatId || !knownUsers[userId]) return;
+      if (!Array.isArray(knownUsers[userId].mutedChats)) knownUsers[userId].mutedChats = [];
+      if (muted && !knownUsers[userId].mutedChats.includes(chatId)) {
+        knownUsers[userId].mutedChats.push(chatId);
+      } else if (!muted) {
+        knownUsers[userId].mutedChats = knownUsers[userId].mutedChats.filter(x => x !== chatId);
+      }
+      await saveUser(userId);
+      socket.emit('mutes-updated', { mutedChats: knownUsers[userId].mutedChats });
+    } catch (e) {}
+  });
+
+  socket.on('search-messages', ({ userId, query }) => {
+    try {
+      const q = String(query || '').toLowerCase().trim();
+      if (!q || q.length < 2) return socket.emit('search-messages-result', { query, results: [] });
+      const visible = visibleMessagesFor(userId);
+      const results = visible
+        .filter(m => !m.deleted && m.text && m.text.toLowerCase().includes(q))
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 50);
+      socket.emit('search-messages-result', { query, results });
+    } catch (e) {}
+  });
+
+  socket.on('delivered', async ({ userId, messageIds }) => {
+    try {
+      if (!userId || !Array.isArray(messageIds)) return;
+      const updated = [];
+      messageIds.forEach(id => {
+        const m = messages.find(x => x.id === id);
+        if (m && Array.isArray(m.deliveredTo) && !m.deliveredTo.includes(userId)) {
+          m.deliveredTo.push(userId);
+          updated.push(m);
+        }
+      });
+      if (updated.length) {
+        for (const m of updated) await updateMessage(m.id, { deliveredTo: m.deliveredTo });
+        updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
+      }
+    } catch (e) {}
+  });
+
+  socket.on('read', async ({ userId, messageIds }) => {
+    try {
+      if (!userId || !Array.isArray(messageIds)) return;
+      const updated = [];
+      messageIds.forEach(id => {
+        const m = messages.find(x => x.id === id);
+        if (m && Array.isArray(m.readBy) && !m.readBy.includes(userId)) {
+          m.readBy.push(userId);
+          if (!m.deliveredTo.includes(userId)) m.deliveredTo.push(userId);
+          updated.push(m);
+        }
+      });
+      if (updated.length) {
+        for (const m of updated) await updateMessage(m.id, { readBy: m.readBy, deliveredTo: m.deliveredTo });
+        updated.forEach(m => emitToUsers(messageRecipients(m), 'message-update', m));
+      }
+    } catch (e) {}
+  });
+
   socket.on('typing', ({ to, from-removed', { userId: contactId });
       }
     } catch (e) {}
