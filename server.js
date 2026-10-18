@@ -117,7 +117,10 @@ async function startMongo() {
     col.subs.createIndex({ userId: 1 }, { unique: true }),
     col.hiddenChats.createIndex({ userId: 1 }, { unique: true }),
     col.encKeys.createIndex({ chatId: 1 }, { unique: true }),
-    col.files.createIndex({ fileId: 1 }, { unique: true })
+    col.files.createIndex({ fileId: 1 }, { unique: true }),
+    col.stories.createIndex({ id: 1 }, { unique: true }),
+    col.stories.createIndex({ userId: 1, createdAt: -1 }),
+    col.stories.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
   ]);
   // Индексы сессий — отдельно и терпимо к «уже существует» (см. ensureSessionIndexes)
   await ensureSessionIndexes();
@@ -489,8 +492,19 @@ function pubUser(u) {
   return {
     userId: u.userId, name: u.name, username: u.username,
     color: u.color, initials: u.initials, avatar: u.avatar || null,
+    bio: u.bio || '',
     online: online.has(u.userId)
   };
+}
+
+// ---------- Истории (Stories, как в Telegram): живут 24 часа ----------
+const STORY_TTL = 24 * 3600 * 1000;
+async function storiesPayload(viewerId) {
+  const list = await col.stories.find({ expiresAt: { $gt: now() } }).sort({ createdAt: 1 }).toArray();
+  return list.map(s => {
+    const liked = Array.isArray(s.likes) && s.likes.indexOf(viewerId) >= 0;
+    return { id: s.id, userId: s.userId, type: s.type, src: s.src, caption: s.caption || '', createdAt: s.createdAt, seenBy: s.seenBy || [], liked };
+  });
 }
 
 // Ключи документов (для быстрых map-lookup'ов поверх Mongo)
@@ -747,6 +761,7 @@ io.on('connection', (socket) => {
     socket.emit('rooms', await roomsList());
     socket.emit('users', await usersForViewer(userId));
     io.emit('user-updated', { userId, user: pubUser(u) });
+    socket.emit('stories', await storiesPayload(userId));
   }
 
   // auth-обёртка: асинхронная, с перехватом ошибок (исключает unhandled rejections)
@@ -1313,7 +1328,9 @@ io.on('connection', (socket) => {
       const f = await col.files.findOne({ fileId: data.avatar.slice(0, 64) });
       if (f && f.ownerId === userId && /^image\//.test(f.type)) set.avatar = '/f/' + f.fileId;
     }
-    // смена @username
+    // биография (O себе) — можно очистить
+    if (data.bio !== undefined) set.bio = String(data.bio || '').trim().slice(0, 140);
+    // смена @username (пустая строка не допускается — как в Telegram)
     if (typeof data.username === 'string' && data.username.trim()) {
       const nu = data.username.trim().toLowerCase().replace(/^@/, '');
       if (!/^[a-z][a-z0-9_]{2,19}$/.test(nu)) {
@@ -1349,6 +1366,62 @@ io.on('connection', (socket) => {
     await col.encKeys.deleteMany({ by: userId });
     socket.emit('password-changed', {});
     socket.emit('toast-msg', { text: 'Пароль изменён. Ключи шифрования пересозданы.' });
+  }));
+
+  // ---------- Истории (Stories) ----------
+  socket.on('stories-get', limited(rlRoomOps, async (data, cb) => {
+    const userId = socket.data.userId;
+    if (!userId) return;
+    const list = await storiesPayload(userId);
+    if (typeof cb === 'function') cb(list);
+  }));
+
+  socket.on('story-add', limited(rlMessage, async (data = {}) => {
+    const userId = socket.data.userId;
+    if (!userId) return;
+    const src = String(data.src || '');
+    if (!/^\/f\/[A-Za-z0-9_]+$/.test(src)) return socket.emit('error-msg', { text: 'Некорректный файл истории' });
+    const f = await col.files.findOne({ fileId: src.slice(3) });
+    if (!f || f.ownerId !== userId) return socket.emit('error-msg', { text: 'Файл не найден' });
+    const isImg = /^image\//.test(f.type), isVid = /^video\//.test(f.type);
+    if (!isImg && !isVid) return socket.emit('error-msg', { text: 'История — это фото или видео' });
+    const active = await col.stories.countDocuments({ userId });
+    if (active >= 10) return socket.emit('error-msg', { text: 'Слишком много активных историй (макс. 10)' });
+    const story = {
+      id: uid('st'), userId, type: isImg ? 'photo' : 'video', src,
+      caption: String(data.caption || '').trim().slice(0, 200),
+      createdAt: now(), expiresAt: now() + STORY_TTL, seenBy: [], likes: []
+    };
+    await col.stories.insertOne(story);
+    io.emit('story-new', { id: story.id, userId: story.userId, type: story.type, src: story.src, caption: story.caption, createdAt: story.createdAt, seenBy: [], liked: false });
+    socket.emit('toast-msg', { text: 'История опубликована на 24 часа' });
+  }));
+
+  socket.on('story-seen', limited(rlRoomOps, async (data = {}) => {
+    const userId = socket.data.userId;
+    const sid = String(data.storyId || '');
+    if (!userId || !sid) return;
+    await col.stories.updateOne({ id: sid }, { $addToSet: { seenBy: userId } });
+  }));
+
+  socket.on('story-like', limited(rlRoomOps, async (data = {}) => {
+    const userId = socket.data.userId;
+    const sid = String(data.storyId || '');
+    if (!userId || !sid) return;
+    const s = await col.stories.findOne({ id: sid });
+    if (!s) return;
+    const liked = Array.isArray(s.likes) && s.likes.indexOf(userId) >= 0;
+    if (liked) await col.stories.updateOne({ id: sid }, { $pull: { likes: userId } });
+    else await col.stories.updateOne({ id: sid }, { $addToSet: { likes: userId } });
+    io.emit('story-liked', { storyId: sid, userId, liked: !liked });
+  }));
+
+  socket.on('story-delete', limited(rlRoomOps, async (data = {}) => {
+    const userId = socket.data.userId;
+    const sid = String(data.storyId || '');
+    if (!userId || !sid) return;
+    const r = await col.stories.deleteOne({ id: sid, userId });
+    if (r.deletedCount) io.emit('story-deleted', { storyId: sid });
   }));
 
   // ---------- E2E: хранение публичных чат-ключей (зашифрованных мастер-паролем клиента) ----------

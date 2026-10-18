@@ -185,6 +185,63 @@ input, textarea, button { font-family: inherit; }
 
 .section-header { padding: 8px 16px 4px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .4px; }
 
+/* ══════ ИСТОРИИ (Stories) — как в Telegram ══════ */
+.stories-row { display: flex; gap: 2px; align-items: center; padding: 10px 10px 8px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); background: var(--sidebar); position: sticky; top: 0; z-index: 5; }
+.stories-row::-webkit-scrollbar { display: none; }
+.stories-row.hidden { display: none; }
+.story-chip { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 76px; min-width: 76px; padding: 6px 0 4px; border: none; background: transparent; cursor: pointer; border-radius: 12px; transition: background .15s; }
+.story-chip:hover { background: var(--sidebar-hover); }
+.story-ring { width: 54px; height: 54px; border-radius: 50%; padding: 2.5px; background: conic-gradient(from -45deg, #ff9d42, #f8307a, #ff5c5c, #ffa31a, #ff9d42); transition: transform .15s; }
+.story-ring.seen { background: var(--story-seen, #b9c2cb); }
+[data-theme="dark"] .story-ring.seen { background: #4c5257; }
+.story-ring.my-add { background: var(--accent-soft, rgba(51,144,236,.15)); }
+.story-inner { width: 100%; height: 100%; border-radius: 50%; border: 2.5px solid var(--sidebar); background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 19px; overflow: hidden; position: relative; background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(255,255,255,0) 55%); }
+.story-inner img { width: 100%; height: 100%; object-fit: cover; }
+.story-plus { position: absolute; right: -3px; bottom: -3px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 2px solid var(--sidebar); color: #fff; display: flex; align-items: center; justify-content: center; }
+.story-plus .icon { width: 11px; height: 11px; stroke-width: 3; }
+.story-name { max-width: 72px; font-size: 11.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.story-arrow { width: 30px; min-width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--search-bg); color: var(--icon-color); cursor: pointer; display: flex; align-items: center; justify-content: center; margin-left: 4px; transition: background .15s; }
+.story-arrow:hover { background: var(--sidebar-hover); }
+.story-arrow .icon { width: 15px; height: 15px; }
+
+/* Полноэкранный просмотрщик историй */
+.story-viewer { position: fixed; inset: 0; z-index: 120; background: rgba(6,8,10,.94); display: none; flex-direction: column; animation: storyFadeIn .22s ease; }
+.story-viewer.open { display: flex; }
+@keyframes storyFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.sv-progress { display: flex; gap: 4px; padding: 10px 14px 4px; }
+.sv-bar { flex: 1; height: 2.5px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
+.sv-bar i { display: block; height: 100%; width: 0; background: #fff; border-radius: 2px; }
+.sv-bar.done i { width: 100%; }
+.sv-bar.active i { animation: svFill var(--sv-dur, 6s) linear forwards; }
+.sv-bar.paused i { animation-play-state: paused; }
+@keyframes svFill { from { width: 0; } to { width: 100%; } }
+.sv-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; color: #fff; }
+.sv-avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; overflow: hidden; flex-shrink: 0; }
+.sv-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.sv-author { font-size: 14px; font-weight: 600; }
+.sv-time { font-size: 12px; opacity: .65; }
+.sv-actions { margin-left: auto; display: flex; gap: 2px; }
+.sv-btn { width: 38px; height: 38px; border-radius: 50%; border: none; background: transparent; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: .85; transition: background .15s, opacity .15s; }
+.sv-btn:hover { background: rgba(255,255,255,.12); opacity: 1; }
+.sv-btn .icon { width: 20px; height: 20px; }
+.sv-stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; }
+.sv-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; user-select: none; -webkit-user-drag: none; }
+.sv-nav { position: absolute; top: 0; bottom: 0; width: 34%; border: none; background: transparent; cursor: pointer; z-index: 2; }
+.sv-nav.prev { left: 0; }
+.sv-nav.next { right: 0; }
+.sv-caption { padding: 10px 18px 6px; color: #fff; font-size: 15px; text-align: center; white-space: pre-wrap; word-break: break-word; }
+.sv-foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px 18px; color: rgba(255,255,255,.85); font-size: 13px; }
+.sv-viewers { display: flex; align-items: center; gap: 6px; }
+.sv-viewers .icon { width: 17px; height: 17px; }
+.sv-like { margin-left: auto; display: flex; align-items: center; gap: 7px; border: none; background: transparent; color: #fff; font-size: 14px; cursor: pointer; padding: 8px 12px; border-radius: 20px; transition: background .15s, transform .1s; }
+.sv-like:hover { background: rgba(255,255,255,.12); }
+.sv-like:active { transform: scale(.92); }
+.sv-like .icon { width: 22px; height: 22px; }
+.sv-like.on { color: #ff5c7a; }
+.sv-like.on .icon { fill: #ff5c7a; stroke: #ff5c7a; animation: heartPop .3s ease; }
+@keyframes heartPop { 0% { transform: scale(.6); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+.sv-empty { color: #fff; font-size: 15px; padding: 40px; }
+
 .chat-item { display: flex; gap: 12px; padding: 9px 13px; cursor: pointer; align-items: center; position: relative; transition: background .1s; }
 .chat-item:hover { background: var(--sidebar-hover); }
 .chat-del { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(0,0,0,.25); color: #fff; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0; z-index: 2; }
@@ -692,6 +749,9 @@ input, textarea, button { font-family: inherit; }
     <label>@username</label>
     <input type="text" id="profileUsername" maxlength="20">
     <div class="hint" id="profileUsernameHint">3–20 символов: a-z, 0-9, _</div>
+    <label>О себе</label>
+    <textarea id="profileBio" maxlength="140" rows="3" style="width:100%;padding:11px 13px;border-radius:12px;border:1.5px solid var(--border);background:var(--search-bg);color:var(--text);font-size:14.5px;font-family:inherit;outline:none;resize:none;transition:border .15s" placeholder="Пара слов о вас"></textarea>
+    <div class="hint" id="profileBioCount">0 / 140</div>
     <button class="primary-btn" id="profileSave">Сохранить</button>
     <button class="cancel-btn" id="profileCancel">Отмена</button>
   </div>
@@ -894,7 +954,13 @@ input, textarea, button { font-family: inherit; }
       </button>
     </div>
 
-    <div class="chats-list" id="chats"></div>
+    <div class="chats-list" id="chats">
+      <div class="stories-row hidden" id="storiesRow"></div>
+    </div>
+
+    <button class="fab" id="addStoryFab" title="Добавить историю" style="bottom:86px">
+      <svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
 
     <button class="fab" id="createRoomBtn" title="Создать">
       <svg class="icon" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -946,6 +1012,46 @@ input, textarea, button { font-family: inherit; }
   </main>
 </div>
 
+<div class="story-viewer" id="storyViewer">
+  <div class="sv-progress" id="svProgress"></div>
+  <div class="sv-head">
+    <button class="sv-btn" id="svClose" title="Закрыть"><svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <div class="sv-avatar" id="svAvatar"></div>
+    <div><div class="sv-author" id="svAuthor"></div><div class="sv-time" id="svTime"></div></div>
+    <div class="sv-actions">
+      <button class="sv-btn" id="svDelete" title="Удалить историю" style="display:none"><svg class="icon" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg></button>
+    </div>
+  </div>
+  <div class="sv-stage" id="svStage">
+    <button class="sv-nav prev" id="svPrevZone" aria-label="Предыдущая"></button>
+    <button class="sv-nav next" id="svNextZone" aria-label="Следующая"></button>
+    <img class="sv-media" id="svMedia" alt="" style="display:none">
+    <video class="sv-media" id="svVideo" playsinline muted loop style="display:none"></video>
+  </div>
+  <div class="sv-caption" id="svCaption"></div>
+  <div class="sv-foot">
+    <div class="sv-viewers" id="svViewers"></div>
+    <button class="sv-like" id="svLike"><svg class="icon" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span id="svLikeCount">0</span></button>
+  </div>
+</div>
+
+<input type="file" id="storyInput" accept="image/*,video/*" style="display:none">
+
+<div class="modal-overlay" id="storyModal" style="display:none">
+  <div class="modal-card">
+    <h2 id="storyModalTitle">Добавить историю</h2>
+    <div style="display:flex;justify-content:center;margin:14px 0">
+      <img id="storyPreviewImg" alt="" style="display:none;max-width:100%;max-height:280px;border-radius:12px">
+      <video id="storyPreviewVideo" playsinline muted style="display:none;max-width:100%;max-height:280px;border-radius:12px"></video>
+    </div>
+    <label id="storyCaptionLabel">Подпись (необязательно)</label>
+    <input type="text" id="storyCaption" maxlength="200">
+    <div class="hint">История будет видна 24 часа</div>
+    <button class="primary-btn" id="storyPublishBtn">Опубликовать</button>
+    <button class="cancel-btn" id="storyCancelBtn">Отмена</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -973,6 +1079,9 @@ var ICONS = {
   star:'<svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
   file:'<svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   close:'<svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  heart:'<svg class="icon" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+  eye:'<svg class="icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  chevRight:'<svg class="icon" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>',
   chatEmpty:'<svg class="icon" viewBox="0 0 24 24" style="stroke-width:1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
 };
 
@@ -1007,7 +1116,8 @@ var I18N = {
     block_confirm:'Заблокировать пользователя? Он не сможет писать вам и не будет вас видеть.',
     blocked_label:'Заблокирован',
     user_blocked_by_you:'Пользователь заблокирован. Разблокируйте, чтобы писать.',
-    write_message:'Написать сообщение'
+    write_message:'Написать сообщение',
+    stories_title:'Истории',add_story:'Добавить историю',story_caption:'Подпись (необязательно)',story_publish:'Опубликовать',story_expired:'История истекла',my_story:'Моя история',seen_by:'Просмотрели'
   },
   en: {
     public_chat:'Public chat',channels:'Channels',groups:'Groups',available:'Available',personal:'Personal',
@@ -1039,7 +1149,8 @@ var I18N = {
     block_confirm:'Block this user? They won\'t be able to message you and won\'t see you.',
     blocked_label:'Blocked',
     user_blocked_by_you:'User is blocked. Unblock to write.',
-    write_message:'Write message'
+    write_message:'Write message',
+    stories_title:'Stories',add_story:'Add story',story_caption:'Caption (optional)',story_publish:'Publish',story_expired:'Story expired',my_story:'My story',seen_by:'Viewed by'
   }
 };
 var LANG = 'ru';
