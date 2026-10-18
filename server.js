@@ -70,7 +70,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
 // ВАЖНО: in-memory база подходит только для разработки — данные исчезают при рестарте!
 const MONGODB_URI = process.env.MONGODB_URI || '';
 let client = null;
-let col = {}; // users, usernames, messages, rooms, invites, subs, hiddenChats, encKeys, sessions, files
+let col = {}; // users, usernames, messages, rooms, invites, subs, hiddenChats, encKeys, sessions, files, stories
 
 async function startMongo() {
   let uri = MONGODB_URI;
@@ -98,7 +98,8 @@ async function startMongo() {
     hiddenChats: dbo.collection('hiddenChats'),
     encKeys: dbo.collection('encKeys'),
     sessions: dbo.collection('sessions'),
-    files: dbo.collection('files')
+    files: dbo.collection('files'),
+    stories: dbo.collection('stories')
   };
   // Санация коллекций от мусора прошлых версий приложения (до создания индексов):
   // иначе уникальные/схлопнутые индексы не создаются из-за E11000 и деплой падает.
