@@ -189,6 +189,8 @@ input, textarea, button { font-family: inherit; }
 .stories-row { display: flex; gap: 2px; align-items: center; padding: 10px 10px 8px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); background: var(--sidebar); position: sticky; top: 0; z-index: 5; }
 .stories-row::-webkit-scrollbar { display: none; }
 .stories-row.hidden { display: none; }
+.user-profile-bio { margin-top: 10px; font-size: 14px; line-height: 1.45; color: var(--text); text-align: center; max-width: 300px; margin-left: auto; margin-right: auto; white-space: pre-wrap; word-break: break-word; }
+.user-profile-bio:empty { display: none; }
 .story-chip { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 76px; min-width: 76px; padding: 6px 0 4px; border: none; background: transparent; cursor: pointer; border-radius: 12px; transition: background .15s; }
 .story-chip:hover { background: var(--sidebar-hover); }
 .story-ring { width: 54px; height: 54px; border-radius: 50%; padding: 2.5px; background: conic-gradient(from -45deg, #ff9d42, #f8307a, #ff5c5c, #ffa31a, #ff9d42); transition: transform .15s; }
@@ -726,6 +728,7 @@ input, textarea, button { font-family: inherit; }
       <div class="user-profile-name" id="upName"></div>
       <div class="user-profile-username" id="upUsername"></div>
       <div class="user-profile-status" id="upStatus"></div>
+      <div class="user-profile-bio" id="upBio"></div>
     </div>
     <div class="user-profile-actions">
       <button class="user-profile-btn primary" id="upMessageBtn">
@@ -1139,7 +1142,7 @@ var I18N = {
     write_message:'Написать сообщение',
     stories_title:'Истории',add_story:'Добавить историю',story_caption:'Подпись (необязательно)',story_publish:'Опубликовать',story_expired:'История истекла',my_story:'Моя история',seen_by:'Просмотрели',
     edit_profile:'Редактировать профиль',edit_profile_hint:'Имя, @username, фото, о себе',bio_label:'О себе',name_label:'Имя',photo_label:'Загрузить фото',photo_remove:'Удалить фото',save:'Сохранить',cancel:'Отмена',
-    enter_username:'Введите @username',invalid_username:'Некорректный @username',username_taken:'@username уже занят',story_empty:'Пока нет историй',stories_of:'истории',only_photo_video:'История — это фото или видео',story_published:'История опубликована на 24 часа'
+    enter_username:'Введите @username',username_hint:'от 3 до 20 символов: a-z, 0-9, _',invalid_username:'Некорректный @username',username_taken:'@username уже занят',story_empty:'Пока нет историй',stories_of:'истории',only_photo_video:'История — это фото или видео',story_published:'История опубликована на 24 часа'
   },
   en: {
     public_chat:'Public chat',channels:'Channels',groups:'Groups',available:'Available',personal:'Personal',
@@ -1174,7 +1177,7 @@ var I18N = {
     write_message:'Write message',
     stories_title:'Stories',add_story:'Add story',story_caption:'Caption (optional)',story_publish:'Publish',story_expired:'Story expired',my_story:'My story',seen_by:'Viewed by',
     edit_profile:'Edit profile',edit_profile_hint:'Name, @username, photo, bio',bio_label:'Bio',name_label:'Name',photo_label:'Upload photo',photo_remove:'Remove photo',save:'Save',cancel:'Cancel',
-    enter_username:'Enter @username',invalid_username:'Invalid @username',username_taken:'@username is taken',story_empty:'No stories yet',stories_of:'stories',only_photo_video:'A story is a photo or video',story_published:'Story published for 24 hours'
+    enter_username:'Enter @username',username_hint:'3–20 chars: a-z, 0-9, _',invalid_username:'Invalid @username',username_taken:'@username is taken',story_empty:'No stories yet',stories_of:'stories',only_photo_video:'A story is a photo or video',story_published:'Story published for 24 hours'
   }
 };
 var LANG = 'ru';
@@ -1424,6 +1427,7 @@ function openUserProfile(userId) {
   var st = $('upStatus');
   if (u.online) { st.textContent = t('online'); st.className = 'user-profile-status online'; }
   else { st.textContent = t('offline'); st.className = 'user-profile-status'; }
+  $('upBio').textContent = u.bio || '';
   var isContact = users.some(function(x){ return x.userId === userId; });
   $('upContactBtnText').textContent = isContact ? t('remove_contact') : t('add_contact');
 
@@ -1691,17 +1695,44 @@ function initUI() {
   $('profileSave').onclick = function(){
     var nn = $('profileName').value.trim();
     if (!nn) return toast(t('enter_name'));
-    if (nn !== me.name) {
-      me.name = nn;
-      me.initials = nn.split(/\s+/).map(function(w){return w[0];}).join('').toUpperCase().slice(0,2) || nn.slice(0,2).toUpperCase();
-    }
-    me.avatar = profileDraft.avatar;
+    var uu = $('profileUsername').value.trim().replace(/^@/, '').toLowerCase();
+    if (uu && !/^[a-z][a-z0-9_]{2,19}$/.test(uu)) return toast(t('invalid_username'));
+    var bb = ($('profileBio').value || '').trim().slice(0, 140);
+    var payload = {
+      name: nn,
+      username: uu || undefined,
+      bio: bb,
+      color: me.color,
+      avatar: profileDraft ? (profileDraft.avatar || null) : (me.avatar || null)
+    };
+    socket.emit('update-profile', payload);
+    // оптимистичное обновление — сервер подтвердит через user-updated
+    me.name = nn;
+    me.initials = nn.split(/\s+/).map(function(w){return w[0];}).join('').toUpperCase().slice(0,2) || nn.slice(0,2).toUpperCase();
+    if (uu) me.username = uu;
+    me.bio = bb;
+    me.avatar = payload.avatar === null ? null : (payload.avatar || me.avatar);
     saveMe();
-    socket.emit('update-profile',{userId:me.userId,name:me.name,color:me.color,initials:me.initials,avatar:me.avatar||null});
-    $('profileModal').style.display = 'none';
+    closeProfileModal();
     toast(t('profile_saved'));
   };
-  $('profileCancel').onclick = function(){ profileDraft=null; $('profileModal').style.display='none'; };
+  $('profileCancel').onclick = function(){ profileDraft=null; closeProfileModal(); };
+
+  // счётчики символов + живой ввод в модалке профиля (как в Telegram)
+  (function bindProfileCounters(){
+    var nameEl = $('profileName'), unEl = $('profileUsername'), bioEl = $('profileBio');
+    function upd(){
+      $('profileNameCount').textContent = (nameEl.value.trim().length) + ' / 30';
+      $('profileBioCount').textContent = (bioEl.value.trim().length) + ' / 140';
+      var v = unEl.value.trim().replace(/^@/, '').toLowerCase();
+      var hint = $('profileUsernameHint');
+      if (!v) { hint.textContent = t('enter_username') + ' — ' + t('username_hint'); hint.style.color = ''; }
+      else if (/^[a-z][a-z0-9_]{2,19}$/.test(v)) { hint.textContent = '@' + v + ' ✓'; hint.style.color = 'var(--success,#4fae4f)'; }
+      else { hint.textContent = t('invalid_username'); hint.style.color = 'var(--danger,#e53935)'; }
+    }
+    [nameEl, unEl, bioEl].forEach(function(el){ el.addEventListener('input', upd); });
+    window.__profileFieldsUpd = upd;
+  })();
 
   $('changePasswordBtn').onclick = function(){
     var op = $('oldPassword').value;
@@ -2200,6 +2231,7 @@ function registerSocket() {
   });
 
   socket.on('toast-msg', function(d){ toast(d.text); });
+  socket.on('profile-error', function(d){ toast(d && d.text ? d.text : t('error')); });
   socket.on('error-msg', function(d){ toast(d.text); });
   socket.on('room-created', function(r){ toast(r.name); openChat(r.id); });
   socket.on('invited', function(d){ toast(d.names.join(', ')); });
@@ -3152,8 +3184,15 @@ function openProfile() {
   profileDraft = { avatar: me.avatar || null };
   $('profileName').value = me.name || '';
   $('profileUsername').value = me.username ? '@' + me.username : '';
+  $('profileBio').value = me.bio || '';
+  if (window.__profileFieldsUpd) window.__profileFieldsUpd();
   updateProfilePreview();
   $('profileModal').style.display = 'flex';
+}
+
+function closeProfileModal() {
+  profileDraft = null;
+  $('profileModal').style.display = 'none';
 }
 
 function updateProfilePreview() {
