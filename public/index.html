@@ -1,15 +1,23 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light">
+<html lang="ru" data-theme="aster-dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#ffffff">
-<meta name="description" content="Pulse — мессенджер в ритме общения.">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0e0f12">
+<meta name="description" content="Aster — мессенджер в стиле «тихий футуризм».">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+/* anti-flash: apply saved Aster theme before first paint */
+(function(){ try{
+  var s = JSON.parse(localStorage.getItem('messenger_settings')||'{}');
+  var th = s.theme === 'light' ? 'aster-light' : (s.theme === 'aster-light' ? 'aster-light' : 'aster-dark');
+  document.documentElement.setAttribute('data-theme', th);
+}catch(e){} })();
+</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Pulse">
-<meta name="application-name" content="Pulse">
+<meta name="apple-mobile-web-app-title" content="Aster">
+<meta name="application-name" content="Aster">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
@@ -17,7 +25,7 @@
 <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/icon-192.png">
-<title>Pulse</title>
+<title>Aster</title>
 <script>
 window.addEventListener('error', function(e){
   console.error('[err]', e.message);
@@ -56,68 +64,129 @@ function loadSocketIO() {
 }
 </script>
 <style>
-/* ══════ TELEGRAM PALETTE · light / dark ══════ */
-:root, [data-theme="light"] {
-  --tg-blue: #3390ec;
-  --bg: #ffffff;
-  --paper: #ffffff;
-  --sidebar: #ffffff;
-  --sidebar-hover: #f4f4f5;
-  --sidebar-active: #3390ec;
-  --chat-bg: #e6EBF1;
-  --in-bg: #ffffff;
-  --in-text: #000000;
-  --out-bg: #e3fee0;
-  --out-text: #000000;
-  --header-bg: #ffffff;
-  --border: #e4e7eb;
-  --border-light: #edeef0;
-  --text: #000000;
-  --text-dim: #707579;
-  --text-mute: #a0a7ad;
-  --accent: #3390ec;
-  --accent-hover: #2b84dc;
-  --accent-soft: rgba(51,144,236,.12);
-  --danger: #e53935;
-  --search-bg: #f4f4f5;
-  --input-inner: #ffffff;
-  --scrollbar: #d5d9dd;
-  --toast-bg: #222529;
-  --icon-color: #707579;
-  --read-tick: #4fae4e;
-  --switch-off: #c6cfd6;
-  --menu-shadow: 0 2px 12px rgba(0,0,0,.18);
+/* ══════ ASTER · Quiet Futurism design tokens (dark default) ══════ */
+:root {
+  /* motion & radius tokens (ТЗ §6) */
+  --radius-sm: 8px; --radius-md: 14px; --radius-lg: 22px;
+  --space-unit: 4px;
+  --motion-fast: 120ms; --motion-base: 180ms; --motion-panel: 240ms;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  /* typography: UI + mono for metadata */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+html[data-theme="aster-dark"], :root, html:not([data-theme]) {
+  color-scheme: dark;
+  --tg-blue: #c6a15b;
+  --bg: #0e0f12;
+  --paper: #0e0f12;
+  --sidebar: #15171c;
+  --sidebar-hover: #1e2128;
+  --sidebar-active: #262a33;
+  --chat-bg: #0e0f12;
+  --in-bg: #1b1e24;
+  --in-text: #f2f3f5;
+  --out-bg: linear-gradient(168deg,#2c2415 0%,#241f14 100%);
+  --out-solid: #2a2317;
+  --out-text: #f4efe4;
+  --header-bg: rgba(21,23,28,.82);
+  --border: #262a33;
+  --border-light: #22262f;
+  --text: #f2f3f5;
+  --text-dim: #9ca3af;
+  --text-mute: #6b7280;
+  --accent: #c6a15b;              /* латунь */
+  --accent-hover: #d4b06c;
+  --accent-soft: rgba(198,161,91,.14);
+  --ice: #9ad7e8;                 /* иней — фокус/активные состояния */
+  --ice-soft: rgba(154,215,232,.12);
+  --glow-brass: rgba(198,161,91,.35);
+  --glow-ice: rgba(154,215,232,.45);
+  --danger: #e06c75;
+  --success: #7bc29a;
+  --search-bg: #1b1e24;
+  --input-inner: #1b1e24;
+  --scrollbar: #2e3340;
+  --toast-bg: #22262e;
+  --icon-color: #9ca3af;
+  --read-tick: #9ad7e8;
+  --switch-off: #343b48;
+  --menu-shadow: 0 12px 40px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.4);
+  --panel-border: rgba(255,255,255,.06);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+  --pattern-dot: rgba(255,255,255,.045);
   --name-colors: #e17076,#edb867,#a7c957,#7bc862,#66d4ee,#5fabf5,#a38cf2,#d47fd4;
 }
-[data-theme="dark"] {
-  --bg: #17212b;
-  --paper: #17212b;
-  --sidebar: #17212b;
-  --sidebar-hover: #202b36;
-  --sidebar-active: #2b527d;
-  --chat-bg: #0e1621;
-  --in-bg: #182533;
-  --in-text: #f1f4f8;
-  --out-bg: #2b527d;
-  --out-text: #f1f4f8;
-  --header-bg: #17212b;
-  --border: #0e1621;
-  --border-light: #242f3d;
-  --text: #f1f4f8;
-  --text-dim: #7d8b99;
-  --text-mute: #5d6b79;
-  --accent: #8774e1;
-  --accent-hover: #9b8bf0;
-  --accent-soft: rgba(135,116,225,.16);
-  --danger: #ff6b6b;
-  --search-bg: #242f3d;
-  --input-inner: #17212b;
-  --scrollbar: #384554;
-  --toast-bg: #222529;
-  --icon-color: #8595a5;
-  --read-tick: #65c3f6;
-  --switch-off: #3d4b5a;
+html[data-theme="aster-light"] {
+  color-scheme: light;
+  --tg-blue: #a97e34;
+  --bg: #f4f2ed;
+  --paper: #faf9f6;
+  --sidebar: #fdfcfa;
+  --sidebar-hover: #f0ede6;
+  --sidebar-active: #ece7db;
+  --chat-bg: #f4f2ed;
+  --in-bg: #ffffff;
+  --in-text: #1c1d21;
+  --out-bg: linear-gradient(168deg,#f4e8cd 0%,#eeddbe 100%);
+  --out-solid: #f1e4c8;
+  --out-text: #2a2313;
+  --header-bg: rgba(253,252,250,.85);
+  --border: #e6e1d6;
+  --border-light: #ece8df;
+  --text: #1c1d21;
+  --text-dim: #6d6a61;
+  --text-mute: #9b978c;
+  --accent: #a97e34;
+  --accent-hover: #96702d;
+  --accent-soft: rgba(169,126,52,.12);
+  --ice: #3d8fa6;
+  --ice-soft: rgba(61,143,166,.12);
+  --glow-brass: rgba(169,126,52,.28);
+  --glow-ice: rgba(61,143,166,.35);
+  --danger: #c0392b;
+  --success: #3f9d6d;
+  --search-bg: #f0ede6;
+  --input-inner: #ffffff;
+  --scrollbar: #d8d3c6;
+  --toast-bg: #26282e;
+  --icon-color: #6d6a61;
+  --read-tick: #3d8fa6;
+  --switch-off: #cfc9bb;
+  --menu-shadow: 0 12px 32px rgba(60,50,20,.16), 0 2px 6px rgba(60,50,20,.08);
+  --panel-border: rgba(28,29,33,.08);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  --pattern-dot: rgba(28,29,33,.05);
+  --name-colors: #d45d64,#c98f2f,#6f9c3a,#4aa352,#2f9fb8,#3d7fd4,#7a5fd4,#b45fb4;
 }
+/* legacy attribute selectors → map to aster vars so old rules keep working */
+[data-theme="aster-dark"] { --bg: var(--bg); }
+
+/* ══════ ASTER skin: grain, light-edge, glass overlays (ТЗ §2) ══════ */
+body::after { content:''; position:fixed; inset:0; pointer-events:none; z-index:9998; background-image:var(--grain); mix-blend-mode:overlay; opacity:.7; }
+* { font-family: var(--font-ui); -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+
+/* Command palette (ТЗ §4/§7) */
+.cmd-overlay { position: fixed; inset: 0; z-index: 3000; background: rgba(5,6,8,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: flex; align-items: flex-start; justify-content: center; padding-top: min(18vh, 160px); animation: fadeIn var(--motion-base) var(--ease); }
+.cmd-card { width: min(560px, 92vw); background: var(--sidebar); border: 1px solid var(--panel-border); border-radius: var(--radius-md); box-shadow: var(--menu-shadow), 0 0 40px -12px var(--glow-brass); overflow: hidden; animation: cmdPop var(--motion-panel) var(--ease); }
+@keyframes cmdPop { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.cmd-input-wrap { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border-light); }
+.cmd-input-wrap .icon { color: var(--accent); }
+.cmd-input-wrap input { flex: 1; border: none; background: transparent; outline: none; color: var(--text); font-size: 15.5px; }
+.cmd-input-wrap input::placeholder { color: var(--text-mute); }
+.cmd-esc, .cmd-foot kbd { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; background: var(--search-bg); }
+.cmd-list { max-height: 320px; overflow-y: auto; padding: 6px; }
+.cmd-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-size: 14px; transition: background var(--motion-fast) var(--ease); }
+.cmd-item .icon { color: var(--icon-color); }
+.cmd-item .cmd-kind { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .5px; }
+.cmd-item.sel { background: var(--sidebar-active); box-shadow: inset 3px 0 0 var(--accent); }
+.cmd-item.sel .icon { color: var(--accent); }
+.cmd-empty { padding: 26px; text-align: center; color: var(--text-dim); font-size: 13.5px; }
+.cmd-foot { display: flex; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--border-light); font-size: 11.5px; color: var(--text-mute); }
+.msg-meta, .chat-time, .sv-time, .fs { font-family: var(--font-mono); letter-spacing: -.2px; }
 
 * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', 'Helvetica Neue', sans-serif; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; overflow: hidden; width: 100%; }
@@ -195,7 +264,7 @@ input, textarea, button { font-family: inherit; }
 .story-chip:hover { background: var(--sidebar-hover); }
 .story-ring { width: 54px; height: 54px; border-radius: 50%; padding: 2.5px; background: conic-gradient(from -45deg, #ff9d42, #f8307a, #ff5c5c, #ffa31a, #ff9d42); transition: transform .15s; }
 .story-ring.seen { background: var(--story-seen, #b9c2cb); }
-[data-theme="dark"] .story-ring.seen { background: #4c5257; }
+[data-theme="aster-dark"] .story-ring.seen { background: #4c5257; }
 .story-ring.my-add { background: var(--accent-soft, rgba(51,144,236,.15)); }
 .story-inner { width: 100%; height: 100%; border-radius: 50%; border: 2.5px solid var(--sidebar); background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 19px; overflow: hidden; position: relative; background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(255,255,255,0) 55%); }
 .story-inner img { width: 100%; height: 100%; object-fit: cover; }
@@ -247,19 +316,21 @@ input, textarea, button { font-family: inherit; }
 .st-unread-dot { position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--sidebar); }
 .story-inner-wrap { position: relative; width: 100%; height: 100%; }
 
-.chat-item { display: flex; gap: 12px; padding: 9px 13px; cursor: pointer; align-items: center; position: relative; transition: background .1s; }
+.chat-item { display: flex; gap: 12px; padding: 9px 13px; cursor: pointer; align-items: center; position: relative; transition: background var(--motion-fast) var(--ease); }
 .chat-item:hover { background: var(--sidebar-hover); }
 .chat-del { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(0,0,0,.25); color: #fff; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0; z-index: 2; }
 .chat-del .icon { width: 15px; height: 15px; stroke: currentColor; }
 .chat-item:hover .chat-del { display: flex; }
 .chat-del:hover { background: var(--danger, #e53935); }
+/* Aster: активный чат — «световая кромка» слева (ТЗ §2) */
 .chat-item.active { background: var(--sidebar-active); }
-[data-theme="light"] .chat-item.active { background: #e9f2fd; }
+.chat-item.active::before { content:''; position:absolute; left:0; top:6px; bottom:6px; width:3px; border-radius:0 3px 3px 0; background:var(--accent); box-shadow:0 0 10px 1px var(--glow-brass); }
+[data-theme="aster-light"] .chat-item.active { background: var(--sidebar-active); }
 .chat-item.active .chat-name, .chat-item.active .chat-time, .chat-item.active .chat-preview, .chat-item.active .chat-preview .from { color: inherit; }
-[data-theme="dark"] .chat-item.active .chat-name, [data-theme="dark"] .chat-item.active .chat-time, [data-theme="dark"] .chat-item.active .chat-preview, [data-theme="dark"] .chat-item.active .chat-preview .from { color: #fff; }
-[data-theme="light"] .chat-item.active .chat-name { color: var(--text); }
+[data-theme="aster-dark"] .chat-item.active .chat-name, [data-theme="aster-dark"] .chat-item.active .chat-time, [data-theme="aster-dark"] .chat-item.active .chat-preview, [data-theme="aster-dark"] .chat-item.active .chat-preview .from { color: #fff; }
+[data-theme="aster-light"] .chat-item.active .chat-name { color: var(--text); }
 .chat-item.active .chat-icons { color: inherit; }
-[data-theme="dark"] .chat-item.active .chat-badge { background: #fff; color: var(--sidebar-active); }
+[data-theme="aster-dark"] .chat-item.active .chat-badge { background: var(--accent); color: #14100a; }
 .chat-item.active .chat-avatar .status { border-color: var(--sidebar); }
 
 .chat-avatar { background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(255,255,255,0) 55%); width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 20px; position: relative; overflow: hidden; }
@@ -291,9 +362,9 @@ input, textarea, button { font-family: inherit; }
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><g fill='none' stroke='%23000' stroke-opacity='0.035' stroke-width='1.5'><circle cx='14' cy='14' r='6'/><rect x='40' y='38' width='12' height='12' rx='3'/><path d='M42 12h10M47 7v10'/><circle cx='16' cy='48' r='4'/></g></svg>");
   background-size: 64px 64px;
 }
-[data-theme="dark"] .chat-window::before { filter: invert(1); opacity: .5; }
+[data-theme="aster-dark"] .chat-window::before { filter: invert(1); opacity: .5; }
 
-.chat-header { height: 56px; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: var(--header-bg); border-bottom: 1px solid var(--border); z-index: 3; flex-shrink: 0; position: relative; box-shadow: 0 1px 0 rgba(0,0,0,.02); }
+.chat-header { height: 56px; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: var(--header-bg); backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); border-bottom: 1px solid var(--panel-border); z-index: 3; flex-shrink: 0; position: relative; box-shadow: none; }
 .back-btn { display: none; width: 36px; height: 36px; border: none; background: transparent; color: var(--icon-color); cursor: pointer; border-radius: 50%; align-items: center; justify-content: center; }
 .back-btn:hover { background: var(--sidebar-hover); }
 .chat-header-avatar { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 15px; cursor: pointer; position: relative; overflow: hidden; transition: transform .15s; }
@@ -335,12 +406,13 @@ input, textarea, button { font-family: inherit; }
 .sender-avatar-mini { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 9px; overflow: hidden; }
 .sender-avatar-mini img { width: 100%; height: 100%; object-fit: cover; }
 
-.bubble { padding: 5px 9px 6px 10px; border-radius: 12px 12px 12px 4px; background: var(--in-bg); color: var(--in-text); font-size: 14.5px; line-height: 1.32; position: relative; word-wrap: break-word; word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,.08); cursor: pointer; user-select: none; max-width: 100%; }
-.msg-wrap.out .bubble { background: var(--out-bg); color: var(--out-text); border-radius: 12px 12px 4px 12px; }
-.msg-wrap.group-end.in .bubble { border-bottom-left-radius: 4px; }
-.msg-wrap.group-end.out .bubble { border-bottom-right-radius: 4px; }
+.bubble { padding: 6px 10px 7px 11px; border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 6px; background: var(--in-bg); color: var(--in-text); font-size: 14.5px; line-height: 1.38; position: relative; word-wrap: break-word; word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 0 0 1px var(--panel-border); cursor: pointer; user-select: none; max-width: 100%; }
+.msg-wrap.out .bubble { background: var(--out-solid); background-image: linear-gradient(168deg,#2c2415,#241f14); color: var(--out-text); border-radius: var(--radius-md) var(--radius-md) 6px var(--radius-md); box-shadow: 0 1px 2px rgba(0,0,0,.2), inset 0 0 0 1px rgba(198,161,91,.16), 0 0 18px -6px var(--glow-brass); }
+[data-theme="aster-light"] .msg-wrap.out .bubble { background-image: linear-gradient(168deg,#f4e8cd,#eeddbe); box-shadow: 0 1px 3px rgba(60,50,20,.12), inset 0 0 0 1px rgba(169,126,52,.2); }
+.msg-wrap.group-end.in .bubble { border-bottom-left-radius: 6px; }
+.msg-wrap.group-end.out .bubble { border-bottom-right-radius: 6px; }
 .msg-wrap.group-end.in .bubble::before { content: ''; position: absolute; left: -7px; bottom: 0; width: 8px; height: 16px; background: var(--in-bg); clip-path: polygon(100% 0, 100% 100%, 0 100%); }
-.msg-wrap.group-end.out .bubble::before { content: ''; position: absolute; right: -7px; bottom: 0; width: 8px; height: 16px; background: var(--out-bg); clip-path: polygon(0 0, 100% 100%, 0 100%); }
+.msg-wrap.group-end.out .bubble::before { content: ''; position: absolute; right: -7px; bottom: 0; width: 8px; height: 16px; background: var(--out-solid); clip-path: polygon(0 0, 100% 100%, 0 100%); }
 .bubble.del { opacity: .55; font-style: italic; }
 
 .reply-quote { padding: 4px 8px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 5px; margin-bottom: 4px; font-size: 13px; }
@@ -356,7 +428,7 @@ input, textarea, button { font-family: inherit; }
 .msg-text { white-space: pre-wrap; word-break: break-word; }
 .msg-meta { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; float: right; margin: 3px -2px -2px 6px; color: var(--text-dim); white-space: nowrap; }
 .msg-wrap.out .msg-meta { color: #4fae4e; }
-[data-theme="dark"] .msg-wrap.out .msg-meta { color: #65c3f6; }
+[data-theme="aster-dark"] .msg-wrap.out .msg-meta { color: #65c3f6; }
 .msg-edited { font-size: 11px; opacity: .8; }
 .msg-status { display: inline-flex; align-items: center; }
 .msg-status .icon { width: 14px; height: 14px; stroke-width: 2.2; }
@@ -364,9 +436,9 @@ input, textarea, button { font-family: inherit; }
 
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: rgba(0,0,0,.06); border-radius: 12px; font-size: 14px; cursor: pointer; transition: transform .1s, background .15s; }
-[data-theme="dark"] .reaction { background: rgba(255,255,255,.1); }
+[data-theme="aster-dark"] .reaction { background: rgba(255,255,255,.1); }
 .msg-wrap.in .reaction { background: var(--accent-soft); }
-[data-theme="dark"] .msg-wrap.in .reaction { background: var(--accent-soft); }
+[data-theme="aster-dark"] .msg-wrap.in .reaction { background: var(--accent-soft); }
 .reaction:hover { transform: scale(1.08); }
 .reaction.mine { background: var(--accent); color: #fff; }
 .reaction .cnt { font-size: 12px; font-weight: 600; }
@@ -394,14 +466,19 @@ input, textarea, button { font-family: inherit; }
 .pending-remove, .reply-preview-close { background: transparent; border: none; color: var(--icon-color); cursor: pointer; padding: 4px; border-radius: 50%; display: flex; }
 .pending-remove:hover, .reply-preview-close:hover { background: var(--sidebar-hover); }
 
-.input-area { padding: 8px 14px 12px; background: var(--header-bg); display: flex; align-items: flex-end; gap: 6px; flex-shrink: 0; position: relative; z-index: 2; }
-.input-area::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--border); }
-.input-inner { flex: 1; display: flex; align-items: flex-end; background: var(--input-inner); border-radius: 18px; padding: 4px 6px 4px 14px; min-height: 42px; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
-.input-inner textarea { flex: 1; border: none; background: transparent; outline: none; resize: none; font-size: 14.5px; color: var(--text); line-height: 1.35; max-height: 200px; padding: 8px 0; font-family: inherit; }
+.input-area { padding: 8px 14px 12px; background: transparent; display: flex; align-items: flex-end; gap: 6px; flex-shrink: 0; position: relative; z-index: 2; }
+.input-area::before { display: none; }
+/* Aster: «плавающий» композер (ТЗ §5) */
+.input-inner { flex: 1; display: flex; align-items: flex-end; background: var(--input-inner); border-radius: var(--radius-lg); padding: 4px 6px 4px 14px; min-height: 44px; box-shadow: 0 6px 24px rgba(0,0,0,.35), inset 0 0 0 1px var(--panel-border); transition: box-shadow var(--motion-base) var(--ease); }
+.input-inner:focus-within { box-shadow: 0 6px 24px rgba(0,0,0,.35), inset 0 0 0 1.5px var(--ice), 0 0 16px -4px var(--glow-ice); }
+[data-theme="aster-light"] .input-inner { box-shadow: 0 6px 20px rgba(60,50,20,.12), inset 0 0 0 1px var(--panel-border); }
+.input-inner textarea { flex: 1; border: none; background: transparent; outline: none; resize: none; font-size: 14.5px; color: var(--text); line-height: 1.35; max-height: 200px; padding: 9px 0; font-family: inherit; }
 .input-inner textarea::placeholder { color: var(--text-dim); }
-.send-btn { width: 40px; height: 40px; border: none; border-radius: 50%; background: transparent; color: var(--accent); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
-.send-btn:hover { background: var(--accent-soft); }
-.send-btn:disabled { opacity: .4; cursor: not-allowed; }
+.send-btn { width: 44px; height: 44px; border: none; border-radius: 50%; background: var(--accent); color: #14100a; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: transform var(--motion-fast) var(--ease), background var(--motion-fast), box-shadow var(--motion-fast); box-shadow: 0 4px 14px -2px var(--glow-brass); }
+.send-btn .icon { width: 19px; height: 19px; transform: translateX(1px); }
+.send-btn:hover { background: var(--accent-hover); transform: scale(1.06); }
+.send-btn:active { transform: scale(.94); }
+.send-btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .send-btn.uploading .icon { display: none; }
 .send-btn.uploading::after { content: ''; width: 16px; height: 16px; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
@@ -602,9 +679,9 @@ input, textarea, button { font-family: inherit; }
 <body>
 
 <div class="boot" id="bootScreen">
-  <div class="boot-logo">PULSE</div>
+  <div class="boot-logo">ASTER</div>
   <div class="boot-spinner"></div>
-  <div class="boot-text">Pulse Messenger<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
+  <div class="boot-text">Aster<div class="boot-hint" id="bootHint">Подключение к серверу…</div></div>
   <button class="boot-retry" id="bootRetry" onclick="location.reload()">Перезагрузить</button>
 </div>
 
@@ -613,7 +690,7 @@ input, textarea, button { font-family: inherit; }
     <div class="login-logo">
       <svg viewBox="0 0 24 24" width="54" height="54" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
     </div>
-    <h1 class="login-title" id="loginTitle">Pulse Messenger</h1>
+    <h1 class="login-title" id="loginTitle">Aster</h1>
     <p class="login-sub" id="loginSub">Войдите, чтобы начать общение</p>
     <div id="loginForm">
       <div class="tg-field">
@@ -707,7 +784,7 @@ input, textarea, button { font-family: inherit; }
 
 <div class="modal-overlay" id="statsModal" style="display:none">
   <div class="modal-card" style="max-width:440px">
-    <h2>Статистика Pulse</h2>
+    <h2>Статистика Aster</h2>
     <div class="sub">Общая статистика</div>
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-value" id="statUsers">—</div><div class="stat-label">Пользователей</div></div>
@@ -793,13 +870,13 @@ input, textarea, button { font-family: inherit; }
     <h2>Оформление</h2>
     <label>Тема</label>
     <div class="type-options">
-      <div class="type-option theme-o" data-th="light">
-        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-        <div class="label">Светлая</div>
-      </div>
-      <div class="type-option theme-o" data-th="dark">
+      <div class="type-option theme-o" data-th="dark" title="Графит и латунь">
         <svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        <div class="label">Тёмная</div>
+        <div class="label">Полночь</div><div class="desc">графит · латунь</div>
+      </div>
+      <div class="type-option theme-o" data-th="light" title="Пергамент и янтарь">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <div class="label">Пергамент</div><div class="desc">тёплый свет</div>
       </div>
     </div>
     <label>Акцент</label>
@@ -862,7 +939,7 @@ input, textarea, button { font-family: inherit; }
         <div class="account-divider"></div>
         <div class="account-item" id="accTheme">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5z"/></svg>
-          <div class="account-text">Оформление<div class="account-hint" id="accThemeHint">Светлая</div></div>
+          <div class="account-text">Оформление<div class="account-hint" id="accThemeHint">Полночь</div></div>
         </div>
         <div class="account-item" id="accNight">
           <svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -902,11 +979,11 @@ input, textarea, button { font-family: inherit; }
         <h2 style="font-size:16px;font-weight:600">О программе</h2>
       </div>
       <div class="about-content">
-        <div class="about-logo">💬</div>
-        <div class="about-title">Pulse</div>
+        <div class="about-logo">✦</div>
+        <div class="about-title">Aster</div>
         <div class="about-version">Версия 1.0.0</div>
         <div class="about-text">
-          Pulse — мессенджер в ритме общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
+          Aster — тихий футуризм общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
           <b>Возможности:</b><br>
           • Личные чаты и группы<br>
           • Каналы для публикаций<br>
@@ -1077,6 +1154,18 @@ input, textarea, button { font-family: inherit; }
 
 <div class="toast" id="toast"></div>
 
+<div class="cmd-overlay" id="cmdPalette" style="display:none">
+  <div class="cmd-card">
+    <div class="cmd-input-wrap">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="cmdInput" type="text" placeholder="Команда или поиск…" autocomplete="off" spellcheck="false" aria-label="Командная палитра">
+      <kbd class="cmd-esc">Esc</kbd>
+    </div>
+    <div class="cmd-list" id="cmdList" role="listbox"></div>
+    <div class="cmd-foot"><span><kbd>↑↓</kbd> навигация</span><span><kbd>Enter</kbd> выбрать</span><span><kbd>Ctrl/⌘ K</kbd> открыть</span></div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -1124,7 +1213,7 @@ var I18N = {
     copied:'Скопировано',profile_saved:'Профиль сохранён',
     photo_uploaded:'Фото готово',
     connection_lost:'Соединение потеряно',connection_restored:'Восстановлено',
-    account_created:'Аккаунт Pulse создан',welcome_back_toast:'С возвращением в Pulse!',
+    account_created:'Аккаунт Aster создан',welcome_back_toast:'С возвращением в Aster!',
     enter_name:'Введите имя',invalid_username:'Некорректный @username',enter_username:'Введите @username',
     pwd_short:'Минимум 4 символа',enter_room_name:'Введите название',
     leave_confirm:'Покинуть чат?',kick_confirm:'Исключить?',logout_confirm:'Выйти?',
@@ -1159,7 +1248,7 @@ var I18N = {
     copied:'Copied',profile_saved:'Profile saved',
     photo_uploaded:'Photo ready',
     connection_lost:'Connection lost',connection_restored:'Restored',
-    account_created:'Pulse account created',welcome_back_toast:'Welcome back to Pulse!',
+    account_created:'Aster account created',welcome_back_toast:'Welcome back to Aster!',
     enter_name:'Enter name',invalid_username:'Invalid @username',enter_username:'Enter @username',
     pwd_short:'At least 4 chars',enter_room_name:'Enter name',
     leave_confirm:'Leave chat?',kick_confirm:'Kick?',logout_confirm:'Logout?',
@@ -1220,7 +1309,7 @@ function fallbackCopy(text) {
   } catch(e) { toast(t('error')); }
 }
 
-var ACCENTS = ['#3390ec','#4fae4e','#e17076','#f0a437','#8774e1','#5cc9e8','#ff5cb8','#e8425a'];
+var ACCENTS = ['#c6a15b','#9ad7e8','#8f7bd4','#d47fd4','#7bc29a','#e06c75','#f0a437','#6ea8fe'];
 
 var socket = null;
 var me = null, sessionToken = null;
@@ -1302,12 +1391,13 @@ async function e2eDecrypt(msg){
 function lockIconHtml(){ return '<span title="Сквозное шифрование (E2E)" style="color:var(--accent);font-size:11px">&#128274;</span>'; }
 
 function applyTheme() {
-  document.documentElement.setAttribute('data-theme', settings.theme || 'light');
-  var isDefaultAccent = !settings.accent || ['#ff5c39','#3390ec','#8774e1'].indexOf(settings.accent) >= 0;
+  var th = (settings.theme === 'light') ? 'aster-light' : 'aster-dark';
+  document.documentElement.setAttribute('data-theme', th);
+  var isDefaultAccent = !settings.accent || ['#ff5c39','#3390ec','#8774e1','#c6a15b'].indexOf(settings.accent) >= 0;
   if (isDefaultAccent) { document.documentElement.style.removeProperty('--accent'); document.documentElement.style.removeProperty('--accent-hover'); }
   else { document.documentElement.style.setProperty('--accent', settings.accent); document.documentElement.style.setProperty('--accent-hover', settings.accent); }
   var meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', settings.theme === 'dark' ? '#17212b' : '#ffffff');
+  if (meta) meta.setAttribute('content', th === 'aster-light' ? '#f4f2ed' : '#0e0f12');
 }
 function applyLang() { LANG = settings.language || 'ru'; document.documentElement.lang = LANG; }
 function saveMe(){ try{ localStorage.setItem('messenger_me', JSON.stringify(me)); }catch(e){} }
@@ -1456,7 +1546,7 @@ function closeChatToSidebar() {
 function showAuthTab(tab) {
   $('loginForm').style.display = tab==='login'?'block':'none';
   $('registerForm').style.display = tab==='register'?'block':'none';
-  $('loginTitle').textContent = tab==='login' ? 'Pulse Messenger' : 'Создать аккаунт';
+  $('loginTitle').textContent = tab==='login' ? 'Aster' : 'Создать аккаунт';
   $('loginSub').textContent = tab==='login' ? 'Войдите, чтобы начать общение' : 'Придумайте имя, @username и пароль';
 }
 
@@ -1580,7 +1670,7 @@ function initUI() {
 
   function toggleNightMode() {
     var cur = document.documentElement.getAttribute('data-theme');
-    settings.theme = cur === 'dark' ? 'light' : 'dark';
+    settings.theme = (cur === 'aster-light' || cur === 'light') ? 'dark' : 'light';
     applyTheme(); updateThemePicker(); updateAccMenu(); saveSettings();
     renderChats(); updateHeader();
   }
@@ -3156,7 +3246,7 @@ function updateAccMenu() {
   $('accName').textContent = me.name || '';
   $('accUser').textContent = me.username ? '@' + me.username : '';
   $('nightToggle').classList.toggle('on', settings.theme === 'dark');
-  $('accThemeHint').textContent = settings.theme === 'dark' ? 'Тёмная' : 'Светлая';
+  $('accThemeHint').textContent = settings.theme === 'light' ? 'Пергамент' : 'Полночь';
   $('pushToggle').classList.toggle('on', pushEnabled);
   $('accNotifyHint').textContent = pushEnabled ? 'Включены' : 'Выключены';
 }
@@ -3285,6 +3375,88 @@ document.addEventListener('DOMContentLoaded', function(){
 // expose helpers used inline
 window.openChat = openChat;
 window.sendMessage = sendMessage;
+
+/* ══════ ASTER · Command palette (Ctrl/Cmd + K, ТЗ §4) ══════ */
+var cmdItems = [], cmdSel = 0;
+function cmdIcon(name){
+  var P = {
+    chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    globe:'<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+    moon:'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+    search:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+    users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    bookmark:'<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+    story:'<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/>'
+  };
+  return '<svg class="icon" viewBox="0 0 24 24">'+(P[name]||P.chat)+'</svg>';
+}
+function cmdBuild(q){
+  q = (q||'').trim().toLowerCase();
+  var out = [];
+  function match(s){ return !q || String(s).toLowerCase().indexOf(q) >= 0; }
+  if (match('общий чат') || q==='общий' || q==='public') out.push({ icon:'globe', label:'Общий чат — все пользователи', kind:'чат', run:function(){ openChat('public'); } });
+  if (match('сохранённые') || q==='saved') out.push({ icon:'bookmark', label:'Сохранённые', kind:'чат', run:function(){ openChat('saved'); } });
+  rooms.forEach(function(r){ if (match(r.name)) out.push({ icon:'users', label:r.name, kind: r.type==='channel'?'канал':'группа', run:function(){ openChat(r.id); } }); });
+  users.forEach(function(u){ if (u.userId!==me.userId && (match(u.name) || match((u.username||'')))) out.push({ icon:'user', label: u.name + (u.username?' · @'+u.username:''), kind:'профиль', run:function(){ openChat(u.userId); } }); });
+  if (match('новая группа') || q==='создать') out.push({ icon:'edit', label:'Создать группу или канал', kind:'действие', run:function(){ $('createModal').style.display='flex'; } });
+  if (match('профиль') || q==='я') out.push({ icon:'user', label:'Мой профиль', kind:'действие', run:function(){ openProfile(); } });
+  if (match('тема') || match('ночной') || match('оформление')) out.push({ icon:'moon', label:'Переключить тему', kind:'действие', run:function(){ toggleNightMode(); } });
+  if (match('история') || q==='story') out.push({ icon:'story', label:'Добавить историю', kind:'действие', run:function(){ pickStoryFile(); } });
+  if (match('поиск сообщений')) out.push({ icon:'search', label:'Поиск по сообщениям', kind:'действие', run:function(){ $('msgSearchOverlay').classList.add('open'); setTimeout(function(){ $('msgSearchInput').focus(); }, 120); } });
+  // живой поиск по сообщениям при запросе >= 3 символов
+  if (q.length >= 3) {
+    var hits = allMsgs.filter(function(m){ return m.text && !m.deleted && String(m.text).toLowerCase().indexOf(q)>=0; }).slice(-8).reverse();
+    hits.forEach(function(m){ out.push({ icon:'search', label: String(m.text).slice(0,60), kind:(m.fromName||'')+' · сообщение', run:function(){
+      openChat(chatKey(m));
+      setTimeout(function(){ var w=document.querySelector('.msg-wrap[data-mid="'+m.id+'"]'); if(w){ w.scrollIntoView({block:'center'}); w.style.outline='2px solid var(--ice)'; setTimeout(function(){ w.style.outline=''; },1600);} }, 300);
+    } }); });
+  }
+  cmdItems = out.slice(0, 14); cmdSel = 0;
+}
+function cmdRender(){
+  var list = $('cmdList');
+  if (!cmdItems.length) { list.innerHTML = '<div class="cmd-empty">Ничего не найдено</div>'; return; }
+  list.innerHTML = '';
+  cmdItems.forEach(function(it, i){
+    var d = document.createElement('div');
+    d.className = 'cmd-item' + (i===cmdSel?' sel':'');
+    d.setAttribute('role','option');
+    d.innerHTML = cmdIcon(it.icon) + '<span>'+esc(it.label)+'</span><span class="cmd-kind">'+esc(it.kind)+'</span>';
+    d.onclick = function(){ cmdRun(i); };
+    d.onmousemove = function(){ if(cmdSel!==i){ cmdSel=i; cmdRender(); } };
+    list.appendChild(d);
+  });
+  var selEl = list.children[cmdSel]; if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' });
+}
+function cmdRun(i){
+  var it = cmdItems[i]; closeCmdPalette();
+  if (it && typeof it.run === 'function') it.run();
+}
+function openCmdPalette(){
+  if (!me) return;
+  $('cmdPalette').style.display = 'flex';
+  $('cmdInput').value = '';
+  cmdBuild(''); cmdRender();
+  setTimeout(function(){ $('cmdInput').focus(); }, 60);
+}
+function closeCmdPalette(){ $('cmdPalette').style.display = 'none'; }
+document.addEventListener('keydown', function(e){
+  var meta = e.ctrlKey || e.metaKey;
+  if (meta && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) {
+    if ($('cmdPalette').style.display === 'flex') closeCmdPalette(); else openCmdPalette();
+    e.preventDefault(); return;
+  }
+  if ($('cmdPalette').style.display !== 'flex') return;
+  if (e.key === 'Escape') { closeCmdPalette(); e.preventDefault(); return; }
+  if (e.key === 'ArrowDown') { cmdSel = Math.min(cmdSel+1, cmdItems.length-1); cmdRender(); e.preventDefault(); return; }
+  if (e.key === 'ArrowUp') { cmdSel = Math.max(cmdSel-1, 0); cmdRender(); e.preventDefault(); return; }
+  if (e.key === 'Enter') { cmdRun(cmdSel); e.preventDefault(); return; }
+});
+$('cmdInput').addEventListener('input', function(){ cmdBuild(this.value); cmdRender(); });
+$('cmdPalette').addEventListener('mousedown', function(e){ if (e.target === this) closeCmdPalette(); });
+window.openCmdPalette = openCmdPalette;
 </script>
 </body>
 </html>
