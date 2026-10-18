@@ -241,6 +241,9 @@ input, textarea, button { font-family: inherit; }
 .sv-like.on .icon { fill: #ff5c7a; stroke: #ff5c7a; animation: heartPop .3s ease; }
 @keyframes heartPop { 0% { transform: scale(.6); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
 .sv-empty { color: #fff; font-size: 15px; padding: 40px; }
+.story-sep { width: 1px; height: 46px; background: var(--border); margin: 0 2px; flex-shrink: 0; align-self: center; }
+.st-unread-dot { position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--sidebar); }
+.story-inner-wrap { position: relative; width: 100%; height: 100%; }
 
 .chat-item { display: flex; gap: 12px; padding: 9px 13px; cursor: pointer; align-items: center; position: relative; transition: background .1s; }
 .chat-item:hover { background: var(--sidebar-hover); }
@@ -416,6 +419,16 @@ input, textarea, button { font-family: inherit; }
 .account-item:hover { background: var(--sidebar-hover); }
 .account-item .icon { color: var(--icon-color); width: 21px; height: 21px; }
 .account-item.danger .account-text, .account-item.danger .icon { color: var(--danger); }
+.account-item.accent-item .account-text, .account-item.accent-item .icon { color: var(--accent); }
+.acc-avatar-btn { width: 34px; height: 34px; border-radius: 50%; border: none; padding: 0; overflow: hidden; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: box-shadow .15s, transform .12s; position: relative; }
+.acc-avatar-btn:hover { box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px var(--accent); }
+.acc-avatar-btn:active { transform: scale(.93); }
+.acc-avatar-btn img { width: 100%; height: 100%; object-fit: cover; }
+.acc-avatar-btn .burger-lines { position: absolute; bottom: 2px; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 1.5px; }
+.acc-avatar-btn .burger-lines span { display: block; height: 1.5px; border-radius: 1px; background: rgba(255,255,255,.85); }
+.acc-avatar-btn .burger-lines span:nth-child(1) { width: 14px; }
+.acc-avatar-btn .burger-lines span:nth-child(2) { width: 10px; }
+.acc-avatar-btn .burger-lines span:nth-child(3) { width: 6px; }
 .account-text { flex: 1; font-size: 14.5px; color: var(--text); }
 .account-hint { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .account-divider { height: 1px; background: var(--border); margin: 6px 0; }
@@ -745,14 +758,16 @@ input, textarea, button { font-family: inherit; }
       <button class="cancel-btn" id="avatarRemoveBtn" style="display:none;color:var(--danger);text-transform:none;width:auto;margin:0">Удалить фото</button>
     </div>
     <label>Имя</label>
-    <input type="text" id="profileName" maxlength="30">
+    <input type="text" id="profileName" maxlength="30" placeholder="Ваше имя">
+    <div class="hint" id="profileNameCount">0 / 30</div>
     <label>@username</label>
-    <input type="text" id="profileUsername" maxlength="20">
-    <div class="hint" id="profileUsernameHint">3–20 символов: a-z, 0-9, _</div>
+    <input type="text" id="profileUsername" maxlength="20" placeholder="username">
+    <div class="hint" id="profileUsernameHint">3–20 символов: a-z, 0-9, _. Позволяет другим находить вас.</div>
     <label>О себе</label>
     <textarea id="profileBio" maxlength="140" rows="3" style="width:100%;padding:11px 13px;border-radius:12px;border:1.5px solid var(--border);background:var(--search-bg);color:var(--text);font-size:14.5px;font-family:inherit;outline:none;resize:none;transition:border .15s" placeholder="Пара слов о вас"></textarea>
     <div class="hint" id="profileBioCount">0 / 140</div>
     <button class="primary-btn" id="profileSave">Сохранить</button>
+    <button class="cancel-btn" id="profilePasswordBtn" style="text-transform:none;width:auto;margin:8px auto 0;color:var(--accent)">Сменить пароль</button>
     <button class="cancel-btn" id="profileCancel">Отмена</button>
   </div>
 </div>
@@ -805,12 +820,17 @@ input, textarea, button { font-family: inherit; }
         </button>
         <h2>Меню</h2>
       </div>
-      <div class="account-profile">
+      <div class="account-profile" id="accProfileCard" style="cursor:pointer" title="Открыть профиль">
         <div class="account-avatar" id="accAvatar"></div>
         <div class="account-name" id="accName"></div>
         <div class="account-username" id="accUser"></div>
       </div>
       <div class="account-list">
+        <div class="account-item accent-item" id="accEditProfile">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          <div class="account-text">Редактировать профиль<div class="account-hint" id="accEditHint">Имя, @username, фото, о себе</div></div>
+        </div>
+        <div class="account-divider"></div>
         <div class="account-item" id="accSaved">
           <svg class="icon" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           <div class="account-text">Сохранённые</div>
@@ -939,8 +959,8 @@ input, textarea, button { font-family: inherit; }
     </div>
 
     <div class="sidebar-header">
-      <button class="menu-btn" id="meAvatar" title="Меню">
-        <svg class="icon icon-lg" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <button class="menu-btn acc-avatar-btn" id="meAvatar" title="Меню">
+        <span id="meAvatarInner"><svg class="icon icon-lg" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></span>
       </button>
       <div class="search-input-wrap side-search">
         <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -1117,7 +1137,9 @@ var I18N = {
     blocked_label:'Заблокирован',
     user_blocked_by_you:'Пользователь заблокирован. Разблокируйте, чтобы писать.',
     write_message:'Написать сообщение',
-    stories_title:'Истории',add_story:'Добавить историю',story_caption:'Подпись (необязательно)',story_publish:'Опубликовать',story_expired:'История истекла',my_story:'Моя история',seen_by:'Просмотрели'
+    stories_title:'Истории',add_story:'Добавить историю',story_caption:'Подпись (необязательно)',story_publish:'Опубликовать',story_expired:'История истекла',my_story:'Моя история',seen_by:'Просмотрели',
+    edit_profile:'Редактировать профиль',edit_profile_hint:'Имя, @username, фото, о себе',bio_label:'О себе',name_label:'Имя',photo_label:'Загрузить фото',photo_remove:'Удалить фото',save:'Сохранить',cancel:'Отмена',
+    enter_username:'Введите @username',invalid_username:'Некорректный @username',username_taken:'@username уже занят',story_empty:'Пока нет историй',stories_of:'истории',only_photo_video:'История — это фото или видео',story_published:'История опубликована на 24 часа'
   },
   en: {
     public_chat:'Public chat',channels:'Channels',groups:'Groups',available:'Available',personal:'Personal',
@@ -1150,7 +1172,9 @@ var I18N = {
     blocked_label:'Blocked',
     user_blocked_by_you:'User is blocked. Unblock to write.',
     write_message:'Write message',
-    stories_title:'Stories',add_story:'Add story',story_caption:'Caption (optional)',story_publish:'Publish',story_expired:'Story expired',my_story:'My story',seen_by:'Viewed by'
+    stories_title:'Stories',add_story:'Add story',story_caption:'Caption (optional)',story_publish:'Publish',story_expired:'Story expired',my_story:'My story',seen_by:'Viewed by',
+    edit_profile:'Edit profile',edit_profile_hint:'Name, @username, photo, bio',bio_label:'Bio',name_label:'Name',photo_label:'Upload photo',photo_remove:'Remove photo',save:'Save',cancel:'Cancel',
+    enter_username:'Enter @username',invalid_username:'Invalid @username',username_taken:'@username is taken',story_empty:'No stories yet',stories_of:'stories',only_photo_video:'A story is a photo or video',story_published:'Story published for 24 hours'
   }
 };
 var LANG = 'ru';
@@ -1204,6 +1228,8 @@ var pendingFile = null, replyTo = null;
 var typingUsers = {}, typingTimeout = null;
 var connected = false, pushEnabled = false, listenersReg = false;
 var profileDraft = null, currentFilter = '';
+var allStories = [], storyGroups = [];   // истории в стиле Telegram
+var sv = { open:false, gi:0, si:0, timer:null };
 var settings = { theme:'light', accent:'', language:'ru' };
 var activeCtx = null;
 var viewingUserId = null;
@@ -1820,6 +1846,7 @@ function registerSocket() {
     }
     if (Array.isArray(data.user.mutedChats)) mutedChats = data.user.mutedChats;
     blockedList = Array.isArray(data.user.blocked) ? data.user.blocked : [];
+    try { socket.emit('stories-get', {}, function(list){ allStories = Array.isArray(list)?list:[]; renderStoriesRow(); }); } catch(e){}
     $('authModal').style.display = 'none';
     $('app').style.display = 'flex';
     hideBoot();
@@ -1833,7 +1860,319 @@ function registerSocket() {
 
   socket.on('history', function(m){ allMsgs = Array.isArray(m)?m:[]; allMsgs.forEach(function(x){ if (isEncMsg(x) && x.from !== me.userId) e2eDecrypt(x); }); renderMessages(); renderChats(); });
   socket.on('rooms', function(r){ rooms = r||[]; renderChats(); updateHeader(); updateInputState(); });
-  socket.on('users', function(u){ users = u||[]; renderChats(); updateHeader(); });
+  socket.on('users', function(u){ users = u||[]; renderChats(); updateHeader(); renderStoriesRow(); });
+
+  // ---------- ИСТОРИИ (Stories) — как в Telegram ----------
+  var STORY_PHOTO_DUR = 6000, STORY_MAX = 10;
+  function storyUser(userId){
+    if (me && userId === me.userId) return me;
+    for (var i=0;i<users.length;i++) if (users[i].userId===userId) return users[i];
+    for (var j=0;j<allMsgs.length;j++) {
+      var m = allMsgs[j];
+      if (m.from===userId && m.fromName) return { userId:userId, name:m.fromName, initials:String(m.fromName).slice(0,2).toUpperCase(), color:'#5288c1', avatar:null };
+    }
+    return { userId:userId, name:'Пользователь', initials:'?', color:'#7d8a99', avatar:null };
+  }
+  function buildStoryGroups(){
+    var order = [], map = {};
+    allStories.forEach(function(s){
+      if (!map[s.userId]) { map[s.userId] = []; order.push(s.userId); }
+      map[s.userId].push(s);
+    });
+    order.sort(function(a,b){
+      if (me && a===me.userId) return -1;
+      if (me && b===me.userId) return 1;
+      return (map[b][0].createdAt||0) - (map[a][0].createdAt||0);
+    });
+    storyGroups = order.map(function(uid){ return { userId:uid, list:map[uid] }; });
+  }
+  function groupSeen(g){ return g.list.every(function(s){ return s.seenBy && s.seenBy.indexOf(me.userId)>=0; }); }
+  function fmtAgo(ts){
+    var diff = Date.now() - ts;
+    if (diff < 60000) return LANG==='ru'?'только что':'just now';
+    var mins = Math.floor(diff/60000);
+    if (mins < 60) return LANG==='ru'?(mins+' мин назад'):mins+' min ago';
+    var hrs = Math.floor(mins/60);
+    if (hrs < 24) return LANG==='ru'?(hrs+' ч назад'):hrs+' h ago';
+    return fmtTime(ts);
+  }
+  function setAvatarHTML(el, u){
+    el.innerHTML = '';
+    if (u.avatar && safeUrl(u.avatar)) { var im=document.createElement('img'); im.src=safeUrl(u.avatar); im.alt=''; el.appendChild(im); el.style.background='#000'; }
+    else { el.textContent = u.initials || '?'; el.style.background = u.color || '#5288c1'; }
+  }
+  function renderStoriesRow(){
+    var row = $('storiesRow');
+    if (!row || !me) return;
+    buildStoryGroups();
+    row.innerHTML = '';
+    // «Моя история» — всегда доступна для публикации (как в TG)
+    var mine = document.createElement('button');
+    mine.className = 'story-chip';
+    mine.title = t('add_story');
+    var myU = storyUser(me.userId);
+    var ringCls = 'story-ring my-add';
+    var hasMine = storyGroups.some(function(g){ return g.userId===me.userId; });
+    var inner = '<div class="'+ringCls+'"><div class="story-inner">'+
+      (myU.avatar && safeUrl(myU.avatar) ? '<img src="'+esc(safeUrl(myU.avatar))+'" alt="">' : esc(myU.initials||'?'))+
+      (hasMine ? '' : '<span class="story-plus"><svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>')+
+      '</div></div><div class="story-name">'+esc(LANG==='ru'?'Моя история':'My story')+'</div>';
+    mine.innerHTML = inner;
+    mine.onclick = function(){
+      var g = storyGroups.filter(function(x){ return x.userId===me.userId; })[0];
+      if (g) openStoryViewer(me.userId); else pickStoryFile();
+    };
+    row.appendChild(mine);
+    storyGroups.forEach(function(g){
+      if (g.userId === me.userId) return;
+      var chip = document.createElement('button');
+      chip.className = 'story-chip';
+      var u = storyUser(g.userId);
+      var seen = groupSeen(g);
+      var firstSrc = u.avatar && safeUrl(u.avatar) ? safeUrl(u.avatar) : null;
+      chip.innerHTML = '<div class="story-ring'+(seen?' seen':'')+'"><div class="story-inner-wrap"><div class="story-inner">'+
+        (firstSrc ? '<img src="'+esc(firstSrc)+'" alt="">' : esc(u.initials||'?'))+
+        '</div></div></div><div class="story-name">'+esc(u.name||'?')+'</div>';
+      chip.onclick = function(){ openStoryViewer(g.userId); };
+      row.appendChild(chip);
+    });
+    if (storyGroups.length > 1) {
+      var arrow = document.createElement('button');
+      arrow.className = 'story-arrow';
+      arrow.title = t('stories_title');
+      arrow.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>';
+      arrow.onclick = function(){ row.scrollBy({ left: 240, behavior: 'smooth' }); };
+      row.appendChild(arrow);
+    }
+    row.classList.toggle('hidden', false);
+  }
+  function openStoryViewer(userId){
+    var gi = -1;
+    for (var i=0;i<storyGroups.length;i++) if (storyGroups[i].userId===userId) { gi=i; break; }
+    if (gi<0) return;
+    sv.gi = gi;
+    var g = storyGroups[gi];
+    var si = 0;
+    while (si < g.list.length-1 && g.list[si].seenBy && g.list[si].seenBy.indexOf(me.userId)>=0) si++;
+    sv.si = si;
+    $('storyViewer').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    showStory();
+  }
+  function closeStoryViewer(){
+    sv.open = false;
+    clearTimeout(sv.timer);
+    var v = $('svVideo'); try{ v.pause(); }catch(e){}
+    $('storyViewer').classList.remove('open');
+    document.body.style.overflow = '';
+    renderStoriesRow();
+  }
+  function markSeen(s){
+    if (!s || s.seenBy.indexOf(me.userId)>=0) return;
+    s.seenBy.push(me.userId);
+    socket.emit('story-seen',{ storyId:s.id });
+  }
+  function showStory(){
+    sv.open = true;
+    clearTimeout(sv.timer);
+    var g = storyGroups[sv.gi];
+    if (!g) { closeStoryViewer(); return; }
+    var s = g.list[sv.si];
+    if (!s) { nextStory(true); return; }
+    var u = storyUser(g.userId);
+    setAvatarHTML($('svAvatar'), u);
+    $('svAuthor').textContent = (g.userId===me.userId) ? t('my_story') : (u.name||'');
+    $('svTime').textContent = fmtAgo(s.createdAt);
+    $('svDelete').style.display = (g.userId===me.userId) ? 'flex' : 'none';
+    var img = $('svMedia'), vid = $('svVideo');
+    vid.pause(); vid.style.display='none'; vid.removeAttribute('src'); vid.load();
+    if (s.type==='video') {
+      img.style.display='none';
+      vid.style.display='block'; vid.src = safeUrl(s.src)||s.src;
+      vid.currentTime = 0; vid.play().catch(function(){});
+    } else {
+      vid.style.display='none';
+      img.style.display='block'; img.src = safeUrl(s.src)||s.src;
+    }
+    $('svCaption').textContent = s.caption||'';
+    $('svCaption').style.display = s.caption ? 'block' : 'none';
+    var lc = (s.likes||[]).length;
+    $('svLikeCount').textContent = lc;
+    $('svLike').classList.toggle('on', !!s.liked);
+    $('svViewers').innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'+
+      esc(String((s.seenBy||[]).length)) + ' ' + esc(t('seen_by'));
+    // прогресс-бары группы
+    var pr = $('svProgress'); pr.innerHTML = '';
+    g.list.forEach(function(st,idx){
+      var bar = document.createElement('div');
+      bar.className = 'sv-bar' + (idx<sv.si?' done':'') + (idx===sv.si?' active':'');
+      bar.innerHTML = '<i></i>';
+      pr.appendChild(bar);
+    });
+    var dur = STORY_PHOTO_DUR;
+    if (s.type==='video') {
+      dur = 15000;
+      vid.onloadedmetadata = function(){ if (vid.duration && isFinite(vid.duration)) { dur = Math.min(vid.duration*1000, 60000); applyDur(dur); } };
+      vid.onended = function(){ nextStory(); };
+    }
+    applyDur(dur);
+    markSeen(s);
+    renderStoriesRow();
+    function applyDur(d){
+      pr.querySelectorAll('.sv-bar.active i').forEach(function(iEl){
+        iEl.parentElement.parentElement.style.setProperty('--sv-dur', d+'ms');
+        iEl.style.animation = 'none'; void iEl.offsetWidth;
+        iEl.style.animation = '';
+      });
+      clearTimeout(sv.timer);
+      sv.timer = setTimeout(nextStory, d);
+    }
+  }
+  function nextStory(fromEdge){
+    var g = storyGroups[sv.gi];
+    if (!g) return closeStoryViewer();
+    if (sv.si+1 < g.list.length) { sv.si++; showStory(); return; }
+    if (!fromEdge) { closeStoryViewer(); return; }
+    var ng = sv.gi+1;
+    while (ng < storyGroups.length && groupSeen(storyGroups[ng])) ng++;
+    if (ng >= storyGroups.length) {
+      if (groupSeen(g)) return closeStoryViewer();
+      sv.si = 0; return showStory();
+    }
+    sv.gi = ng; sv.si = 0; showStory();
+  }
+  function prevStory(){
+    if (sv.si > 0) { sv.si--; return showStory(); }
+    var pg = sv.gi-1;
+    while (pg >= 0 && groupSeen(storyGroups[pg])) pg--;
+    if (pg < 0) return;
+    sv.gi = pg; sv.si = storyGroups[pg].list.length-1; showStory();
+  }
+  function pickStoryFile(){
+    if (!socket.connected || !me) return toast(t('no_connection'));
+    var myCount = allStories.filter(function(s){ return s.userId===me.userId; }).length;
+    if (myCount >= STORY_MAX) return toast(t('only_photo_video'));
+    $('storyInput').click();
+  }
+  function onStoryFilePicked(f){
+    if (!f) return;
+    var isImg = /^image\//.test(f.type), isVid = /^video\//.test(f.type);
+    if (!isImg && !isVid) return toast(t('only_photo_video'));
+    if (f.size > 30*1024*1024) return toast(t('file_too_big'));
+    var btn = $('storyPublishBtn');
+    btn.disabled = true; btn._orig = btn.textContent; btn.textContent = '...';
+    (async function(){
+      try {
+        var toSend = f;
+        if (isImg) { try{ toSend = await compressImage(f, 1280, 0.82); }catch(e){ toSend = f; } }
+        var d = await uploadFile(toSend);
+        var fileId = d.fileId;
+        window.__pendingStory = { src: '/f/' + fileId, file: toSend, type: isImg?'photo':'video' };
+        var pv = $('storyPreviewImg'), pvv = $('storyPreviewVideo');
+        pvv.style.display='none'; pv.style.display='none';
+        var url = URL.createObjectURL(toSend);
+        window.__pendingStory._url = url;
+        if (isImg) { pv.src = url; pv.style.display='block'; }
+        else { pvv.src = url; pvv.style.display='block'; }
+        $('storyCaption').value = '';
+        $('storyModal').style.display = 'flex';
+      } catch(err) { toast(t('error')+': '+err.message); }
+      finally { btn.disabled=false; btn.textContent = btn._orig || t('story_publish'); }
+    })();
+  }
+  // слушатели
+  $('svClose').onclick = closeStoryViewer;
+  $('svPrevZone').onclick = prevStory;
+  $('svNextZone').onclick = function(){ nextStory(true); };
+  $('svLike').onclick = function(){
+    var g = storyGroups[sv.gi]; if (!g) return;
+    var s = g.list[sv.si]; if (!s) return;
+    s.liked = !s.liked;
+    s.likes = s.likes || [];
+    if (s.liked) { s.likes.push(me.userId); } else { var li = s.likes.indexOf(me.userId); if (li>=0) s.likes.splice(li,1); }
+    $('svLike').classList.toggle('on', s.liked);
+    $('svLikeCount').textContent = s.likes.length;
+    socket.emit('story-like',{ storyId:s.id });
+  };
+  $('svDelete').onclick = function(){
+    var g = storyGroups[sv.gi]; if (!g) return;
+    var s = g.list[sv.si]; if (!s) return;
+    openConfirm(t('delete')+'?', function(){
+      socket.emit('story-delete',{ storyId:s.id });
+    });
+  };
+  $('storyInput').onchange = function(e){ onStoryFilePicked(e.target.files[0]); e.target.value=''; };
+  $('addStoryFab').onclick = pickStoryFile;
+  $('storyPublishBtn').onclick = function(){
+    var p = window.__pendingStory;
+    if (!p) { $('storyModal').style.display='none'; return; }
+    socket.emit('story-add',{ src:p.src, caption:$('storyCaption').value.trim() });
+    $('storyModal').style.display='none';
+    if (p._url) { try{ URL.revokeObjectURL(p._url); }catch(e){} }
+    window.__pendingStory = null;
+  };
+  $('storyCancelBtn').onclick = function(){
+    $('storyModal').style.display='none';
+    var p = window.__pendingStory;
+    if (p && p._url) { try{ URL.revokeObjectURL(p._url); }catch(e){} }
+    window.__pendingStory = null;
+  };
+  document.addEventListener('keydown', function(e){
+    if (!sv.open) return;
+    if (e.key==='Escape') closeStoryViewer();
+    else if (e.key==='ArrowRight') nextStory(true);
+    else if (e.key==='ArrowLeft') prevStory();
+  });
+  $('storyViewer').addEventListener('animationend', function(e){
+    if (e.target.tagName==='I' && e.target.closest('.sv-bar.active')) { /* фото-таймер истёк через CSS; JS-таймер делает переход */ }
+  });
+  socket.on('stories', function(list){ allStories = Array.isArray(list)?list:[]; renderStoriesRow(); });
+  socket.on('story-new', function(s){
+    if (!s || !s.id) return;
+    if (allStories.some(function(x){ return x.id===s.id; })) return;
+    s.seenBy = s.seenBy||[]; s.liked = false; s.likes = [];
+    allStories.push(s);
+    renderStoriesRow();
+    if (me && s.userId!==me.userId && !document.hidden) {
+      var n = new Notification((storyUser(s.userId).name||''), { body: s.caption || t('add_story'), icon: '/icon-192.png' });
+    }
+  });
+  socket.on('story-deleted', function(d){
+    allStories = allStories.filter(function(x){ return x.id!==d.storyId; });
+    var wasOpen = sv.open;
+    if (wasOpen) {
+      var g = storyGroups[sv.gi];
+      var cur = g && g.list[sv.si];
+      buildStoryGroups();
+      if (!cur || cur.id===d.storyId) {
+        var stillExists = storyGroups.some(function(x){ return x.list.some(function(y){ return y.id===(cur&&cur.id); }); });
+        if (!stillExists) {
+          var gg = storyGroups[sv.gi];
+          if (!gg || !gg.list.length) { closeStoryViewer(); renderStoriesRow(); return; }
+          sv.si = Math.min(sv.si, gg.list.length-1);
+          showStory();
+        }
+      }
+    }
+    renderStoriesRow();
+  });
+  socket.on('story-liked', function(d){
+    allStories.forEach(function(s){
+      if (s.id!==d.storyId) return;
+      s.likes = s.likes||[];
+      var idx = s.likes.indexOf(d.userId);
+      if (d.liked && idx<0) s.likes.push(d.userId);
+      if (!d.liked && idx>=0) s.likes.splice(idx,1);
+      if (me && d.userId===me.userId) s.liked = d.liked;
+    });
+    if (sv.open) {
+      var g = storyGroups[sv.gi]; var s = g && g.list[sv.si];
+      if (s && s.id===d.storyId) {
+        $('svLikeCount').textContent = (s.likes||[]).length;
+        $('svLike').classList.toggle('on', !!s.liked);
+      }
+    }
+  });
 
   socket.on('user-updated', function(d){
     var i = users.findIndex(function(u){return u.userId===d.userId;});
@@ -1843,9 +2182,12 @@ function registerSocket() {
       if (d.user.name) me.name = d.user.name;
       if (d.user.initials) me.initials = d.user.initials;
       if (d.user.color) me.color = d.user.color;
+      if (d.user.username!==undefined) me.username = d.user.username;
+      if (d.user.bio!==undefined) me.bio = d.user.bio;
       saveMe();
+      updateAccMenu();
     }
-    renderChats(); renderMessages(); updateHeader();
+    renderChats(); renderMessages(); updateHeader(); renderStoriesRow();
     if (viewingUserId === d.userId && $('userProfileModal').style.display === 'flex') {
       openUserProfile(d.userId);
     }

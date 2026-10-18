@@ -1346,7 +1346,6 @@ io.on('connection', (socket) => {
     await col.users.updateOne({ userId }, { $set: set });
     const fresh = await getUser(userId);
     io.emit('user-updated', { userId, user: pubUser(fresh) });
-    socket.emit('profile-saved', { username: fresh.username });
   }));
 
   socket.on('change-password', limited(rlAuth, async (data = {}) => {
