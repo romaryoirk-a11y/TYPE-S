@@ -1,0 +1,3 @@
+[mongo] запущена встроенная in-memory MongoDB: mongodb://127.0.0.1:43837/
+[mongo] база готова: test
+Pulse listening on 3000
