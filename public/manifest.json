@@ -1,8 +1,7 @@
 {
-  "name": "Pulse — мессенджер",
-  "short_name": "Pulse",
-  "description": "Pulse — мессенджер в ритме общения.",
-  "id": "/",
+  "name": "Aster — мессенджер",
+  "short_name": "Aster",
+  "description": "Aster — мессенджер в ритме общения.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
