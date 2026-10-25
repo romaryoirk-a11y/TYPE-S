@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#f4ecd8">
-<meta name="description" content="Pulse — ретро-мессенджер в ритме общения.">
+<meta name="description" content="Aster — мессенджер в ритме общения.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Pulse">
-<meta name="application-name" content="Pulse">
+<meta name="apple-mobile-web-app-title" content="Aster">
+<meta name="application-name" content="Aster">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
@@ -19,7 +19,7 @@
 <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/icon-192.png">
-<title>Pulse</title>
+<title>Aster</title>
 <script>
 window.addEventListener('error', function(e){
   console.error('[err]', e.message);
@@ -672,7 +672,7 @@ body { font-size: 18px; }
       <button data-tab="register">Регистрация</button>
     </div>
     <div id="loginForm">
-      <h2>Вход в Pulse</h2>
+      <h2>Вход в Aster</h2>
       <div class="sub">Введите @username и пароль</div>
       <label>@username</label>
       <input id="loginUsername" type="text" placeholder="username">
@@ -681,7 +681,7 @@ body { font-size: 18px; }
       <button class="primary-btn" id="loginBtn">Войти</button>
     </div>
     <div id="registerForm" style="display:none">
-      <h2>Регистрация в Pulse</h2>
+      <h2>Регистрация в Aster</h2>
       <div class="sub">Придумайте имя, @username и пароль</div>
       <label>Имя</label>
       <input id="regName" type="text" placeholder="Иван Петров" maxlength="30">
@@ -755,7 +755,7 @@ body { font-size: 18px; }
 
 <div class="modal-overlay" id="statsModal" style="display:none">
   <div class="modal-card" style="max-width:440px">
-    <h2>Статистика Pulse</h2>
+    <h2>Статистика Aster</h2>
     <div class="sub">Общая статистика</div>
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-value" id="statUsers">—</div><div class="stat-label">Пользователей</div></div>
@@ -940,10 +940,10 @@ body { font-size: 18px; }
       </div>
       <div class="about-content">
         <div class="about-logo">💬</div>
-        <div class="about-title">Pulse</div>
+        <div class="about-title">Aster</div>
         <div class="about-version">Версия 1.0.0</div>
         <div class="about-text">
-          Pulse — мессенджер в ритме общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
+          Aster — мессенджер в ритме общения. Real-time чаты, группы, каналы, файлы, реакции и push-уведомления.<br><br>
           <b>Возможности:</b><br>
           • Личные чаты и группы<br>
           • Каналы для публикаций<br>
@@ -1116,7 +1116,7 @@ var I18N = {
     copied:'Скопировано',profile_saved:'Профиль сохранён',
     photo_uploaded:'Фото готово',
     connection_lost:'Соединение потеряно',connection_restored:'Восстановлено',
-    account_created:'Аккаунт Pulse создан',welcome_back_toast:'С возвращением в Pulse!',
+    account_created:'Аккаунт Aster создан',welcome_back_toast:'С возвращением в Aster!',
     enter_name:'Введите имя',invalid_username:'Некорректный @username',enter_username:'Введите @username',
     pwd_short:'Минимум 4 символа',enter_room_name:'Введите название',
     leave_confirm:'Покинуть чат?',kick_confirm:'Исключить?',logout_confirm:'Выйти?',
@@ -1148,7 +1148,7 @@ var I18N = {
     copied:'Copied',profile_saved:'Profile saved',
     photo_uploaded:'Photo ready',
     connection_lost:'Connection lost',connection_restored:'Restored',
-    account_created:'Pulse account created',welcome_back_toast:'Welcome back to Pulse!',
+    account_created:'Aster account created',welcome_back_toast:'Welcome back to Aster!',
     enter_name:'Enter name',invalid_username:'Invalid @username',enter_username:'Enter @username',
     pwd_short:'At least 4 chars',enter_room_name:'Enter name',
     leave_confirm:'Leave chat?',kick_confirm:'Kick?',logout_confirm:'Logout?',
@@ -1175,6 +1175,7 @@ function t(k, vars) {
 
 var $ = function(id){ return document.getElementById(id); };
 function esc(s){ var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function safeUrl(u){ u = String(u==null?'':u); return /^(data:image\/|https?:\/\/)/i.test(u) ? u.replace(/"/g,'%22') : ''; }
 function fmtSz(b){ if(b<1024)return b+' Б'; if(b<1048576)return (b/1024).toFixed(1)+' КБ'; return (b/1048576).toFixed(1)+' МБ'; }
 function fmtTime(ts){ return new Date(ts).toLocaleTimeString(LANG==='ru'?'ru-RU':'en-US',{hour:'2-digit',minute:'2-digit'}); }
 function toast(msg, ms){ ms = ms||2200; var el = $('toast'); if(!el)return; el.textContent = msg; el.classList.add('show'); clearTimeout(el._t); el._t = setTimeout(function(){ el.classList.remove('show'); }, ms); }
@@ -1394,7 +1395,7 @@ function openUserProfile(userId) {
   }
   viewingUserId = userId;
   var av = $('upAvatar');
-  if (u.avatar) { av.innerHTML = '<img src="' + u.avatar + '">'; av.style.background = '#000'; }
+  if (u.avatar) { av.innerHTML = '<img src="' + safeUrl(u.avatar) + '">'; av.style.background = '#000'; }
   else { av.textContent = u.initials || '?'; av.style.background = u.color; }
   $('upName').textContent = u.name || 'Пользователь';
   $('upUsername').textContent = u.username ? ('@' + u.username) : '';
@@ -1518,7 +1519,7 @@ function initUI() {
     if (u && u.avatar) {
       var lb = document.createElement('div');
       lb.className = 'lightbox';
-      lb.innerHTML = '<img src="' + u.avatar + '">';
+      lb.innerHTML = '<img src="' + safeUrl(u.avatar) + '">';
       lb.onclick = function(){ lb.remove(); };
       document.body.appendChild(lb);
     }
@@ -1755,7 +1756,7 @@ function initUI() {
     if (!img) return;
     var lb = document.createElement('div');
     lb.className = 'lightbox';
-    lb.innerHTML = '<img src="'+img.dataset.img+'">';
+    lb.innerHTML = '<img src="' + safeUrl(img.dataset.img) + '">';
     lb.onclick = function(){ lb.remove(); };
     document.body.appendChild(lb);
   });
@@ -1928,7 +1929,7 @@ function registerSocket() {
 }
 
 function chatKey(m){ if(m.to==='public')return'public'; if(m.to==='saved')return'saved'; if(m.to.indexOf('r_')===0)return m.to; return m.from===me.userId?m.to:m.from; }
-function avHtml(u){ if(u&&u.avatar)return '<img src="'+u.avatar+'">'; return esc(u.initials||'?'); }
+function avHtml(u){ if(u&&u.avatar&&safeUrl(u.avatar))return '<img src="'+safeUrl(u.avatar)+'">'; return esc(u.initials||'?'); }
 function avStyle(u){ return u.avatar ? 'background:#000' : ('background:'+u.color); }
 
 async function uploadFile(f){
@@ -2037,22 +2038,22 @@ function renderMessages(){
           if (ft.indexOf('image/') === 0) {
             var im = document.createElement('img');
             im.className = 'msg-image';
-            im.src = m.file.url;
-            im.dataset.img = m.file.url;
+            im.src = safeUrl(m.file.url);
+            im.dataset.img = safeUrl(m.file.url);
             im.alt = m.file.name || '';
             im.loading = 'lazy';
             bubble.appendChild(im);
           } else if (ft.indexOf('video/') === 0) {
             var vd = document.createElement('video');
             vd.className = 'msg-image';
-            vd.src = m.file.url;
+            if (safeUrl(m.file.url)) vd.src = m.file.url;
             vd.controls = true;
             vd.preload = 'metadata';
             bubble.appendChild(vd);
           } else if (ft.indexOf('audio/') === 0) {
             var ad = document.createElement('audio');
             ad.style.cssText = 'display:block;margin:3px 0;max-width:100%';
-            ad.src = m.file.url;
+            if (safeUrl(m.file.url)) ad.src = m.file.url;
             ad.controls = true;
             bubble.appendChild(ad);
           } else {
@@ -2153,7 +2154,7 @@ function renderChats() {
     av.style.background = opts.color || '#5288c1';
     if (opts.avatar) {
       av.style.background = '#000';
-      av.innerHTML = '<img src="' + opts.avatar + '">';
+      av.innerHTML = '<img src="' + safeUrl(opts.avatar) + '">';
     } else if (opts.icon) {
       av.innerHTML = opts.icon;
     } else {
@@ -2357,7 +2358,7 @@ function updateHeader() {
     } else {
       nm.textContent = u.name;
       stt.textContent = u.online ? t('online') : t('offline');
-      if (u.avatar) { av.style.background = '#000'; av.innerHTML = '<img src="' + u.avatar + '">'; }
+      if (u.avatar) { av.style.background = '#000'; av.innerHTML = '<img src="' + safeUrl(u.avatar) + '">'; }
       else { av.style.background = u.color; av.textContent = u.initials || '?'; }
       av.style.cursor = 'pointer';
       av.onclick = function(){ openUserProfile(u.userId); };
@@ -2761,7 +2762,7 @@ function renderSearchMsgs(query, results) {
 function updateAccMenu() {
   if (!me) return;
   var av = $('accAvatar');
-  if (me.avatar) { av.innerHTML = '<img src="' + me.avatar + '">'; av.style.background = '#000'; }
+  if (me.avatar) { av.innerHTML = '<img src="' + safeUrl(me.avatar) + '">'; av.style.background = '#000'; }
   else { av.textContent = me.initials || '?'; av.style.background = me.color || '#5288c1'; }
   $('accName').textContent = me.name || '';
   $('accUser').textContent = me.username ? '@' + me.username : '';
@@ -2801,7 +2802,7 @@ function openProfile() {
 function updateProfilePreview() {
   var av = $('avatarPreview');
   var a = profileDraft ? profileDraft.avatar : null;
-  if (a) { av.innerHTML = '<img src="' + a + '">'; av.style.background = '#000'; }
+  if (a) { av.innerHTML = '<img src="' + safeUrl(a) + '">'; av.style.background = '#000'; }
   else { av.textContent = me.initials || '?'; av.style.background = me.color || '#5288c1'; }
   $('avatarRemoveBtn').style.display = a ? 'inline-block' : 'none';
 }

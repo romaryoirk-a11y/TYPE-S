@@ -3,9 +3,9 @@ self.addEventListener('install', (e) => { self.skipWaiting(); });
 self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
 
 self.addEventListener('push', (event) => {
-  let data = { title: 'Pulse', body: 'Новое сообщение' };
+  let data = { title: 'Aster', body: 'Новое сообщение' };
   try { if (event.data) data = Object.assign(data, event.data.json()); } catch (e) {}
-  event.waitUntil(self.registration.showNotification(data.title || 'Pulse', {
+  event.waitUntil(self.registration.showNotification(data.title || 'Aster', {
     body: data.body || '',
     icon: '/icon-192.png',
     badge: '/icon-192.png',

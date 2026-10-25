@@ -29,6 +29,37 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
+
+// Секрет для подписи сессионных токенов (HMAC). В проде задаётся через env;
+// если не задан — генерируется временный (все сессии сбрасываются при рестарте).
+let SESSION_SECRET = process.env.SESSION_SECRET || '';
+if (!SESSION_SECRET) {
+  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  console.warn('[security] SESSION_SECRET не задан — использован временный секрет;' +
+    ' после рестарта сервиса всех пользователей разлогинит.' +
+    ' Сгенерируйте постоянный: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+}
+
+// Простой in-memory rate limiter (на IP/юзера), чтобы не тянуть лишних зависимостей.
+const rlBuckets = new Map(); // key -> { count, resetAt }
+function rateLimit(key, limit, windowMs) {
+  const t = Date.now();
+  const b = rlBuckets.get(key);
+  if (!b || b.resetAt <= t) {
+    rlBuckets.set(key, { count: 1, resetAt: t + windowMs });
+    return true;
+  }
+  if (b.count >= limit) return false;
+  b.count++;
+  return true;
+}
+setInterval(() => {
+  const t = Date.now();
+  for (const [k, v] of rlBuckets) if (v.resetAt <= t) rlBuckets.delete(k);
+}, 60 * 1000).unref();
+
+// Время жизни сессии: 30 дней
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 let webpush = null;
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
   try {
@@ -70,6 +101,11 @@ async function startMongo() {
     sessions: dbo.collection('sessions')
   };
   await Promise.all([
+    // Санация старых сессий: токены в открытом виде больше не храним,
+    // а документы без tokenHash ломали уникальный индекс при миграции схемы.
+    col.sessions.deleteMany({ tokenHash: { $exists: false } }),
+    col.sessions.createIndex({ tokenHash: 1 }, { unique: true }),
+    col.sessions.createIndex({ expiresAt: 1 }),
     col.users.createIndex({ userId: 1 }, { unique: true }),
     col.usernames.createIndex({ username: 1 }, { unique: true }),
     col.messages.createIndex({ id: 1 }, { unique: true }),
@@ -78,8 +114,7 @@ async function startMongo() {
     col.invites.createIndex({ code: 1 }, { unique: true }),
     col.subs.createIndex({ userId: 1 }, { unique: true }),
     col.hiddenChats.createIndex({ userId: 1 }, { unique: true }),
-    col.encKeys.createIndex({ chatId: 1 }, { unique: true }),
-    col.sessions.createIndex({ token: 1 }, { unique: true })
+    col.encKeys.createIndex({ chatId: 1 }, { unique: true })
   ]);
   await migrateFromJson();
   console.log('[mongo] база готова:', dbo.databaseName);
@@ -114,13 +149,30 @@ async function migrateFromJson() {
 const online = new Map();     // userId -> Set<socketId>  (в реальном времени, не хранится в БД)
 
 async function sessionGet(token) {
-  if (!token) return null;
-  const s = await col.sessions.findOne({ token });
-  return s ? s.userId : null;
+  if (!token || typeof token !== 'string') return null;
+  const h = crypto.createHmac('sha256', SESSION_SECRET).update(token).digest('hex');
+  const s = await col.sessions.findOne({ tokenHash: h });
+  if (!s) return null;
+  if (s.expiresAt && s.expiresAt < Date.now()) {
+    col.sessions.deleteOne({ tokenHash: h }).catch(() => {});
+    return null;
+  }
+  return s.userId;
 }
 async function sessionSet(token, userId) {
-  await col.sessions.updateOne({ token }, { $set: { token, userId, createdAt: Date.now() } }, { upsert: true });
+  const h = crypto.createHmac('sha256', SESSION_SECRET).update(token).digest('hex');
+  const nowMs = Date.now();
+  await col.sessions.updateOne({ tokenHash: h }, {
+    $set: { tokenHash: h, userId, createdAt: nowMs, expiresAt: nowMs + SESSION_TTL_MS },
+    $currentDate: { lastSeen: true }
+  }, { upsert: true });
 }
+// Периодическая чистка протухших сессий
+setInterval(() => {
+  if (!col.sessions) return;
+  col.sessions.deleteMany({ expiresAt: { $lt: Date.now() } })
+    .catch(e => console.error('[sessions] cleanup:', e.message));
+}, 10 * 60 * 1000).unref();
 
 // ---------- Express ----------
 const app = express();
@@ -128,15 +180,35 @@ const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 12 * 1024 * 1024 });
 
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  setHeaders(res) { res.setHeader('Cache-Control', 'no-cache'); }
+}));
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-app.post('/upload', upload.single('file'), (req, res) => {
+// Базовые защитные заголовки (без внешних зависимостей вроде helmet)
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+const ALLOWED_MIME = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|ogg|wav|mp4|webm|aac|m4a)|application\/(pdf|zip|x-zip-compressed|json)|text\/plain)$/;
+app.post('/upload', (req, res, next) => {
+  if (!rateLimit('up:' + (req.ip || 'x'), 30, 60 * 1000)) {
+    return res.status(429).json({ error: 'too many uploads' });
+  }
+  next();
+}, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
+  if (!ALLOWED_MIME.test(req.file.mimetype)) {
+    return res.status(415).json({ error: 'unsupported file type' });
+  }
   const b64 = req.file.buffer.toString('base64');
   res.json({
     url: 'data:' + req.file.mimetype + ';base64,' + b64,
-    name: req.file.originalname,
+    name: req.file.originalname.replace(/[^\w.\- ]/g, '').slice(0, 120),
     size: req.file.size,
     type: req.file.mimetype
   });
@@ -461,13 +533,31 @@ io.on('connection', (socket) => {
     }
   });
 
-  // auth-обёртка: асинхронная, с перехватом ошибок
+  // auth-обёртка: асинхронная, с перехватом ошибок + rate-limit на события
   const auth = (fn) => async (data, cb) => {
     if (!socket.data.userId) return;
     try { await fn(data || {}, cb); } catch (e) { console.error('[handler]', e); }
   };
+  const limited = (limit, windowMs, keyFn) => (fn) => async (data, cb) => {
+    if (!socket.data.userId) return;
+    const key = keyFn ? keyFn(socket.data.userId, data) : socket.data.userId;
+    if (!rateLimit('ev:' + key, limit, windowMs)) {
+      socket.emit('error-msg', { text: 'Слишком много действий — подождите немного' });
+      return;
+    }
+    try { await fn(data || {}, cb); } catch (e) { console.error('[handler]', e); }
+  };
 
-  socket.on('message', auth(async (data) => {
+  // защита от брутфорса авторизации (по IP сокета)
+  const ipKey = (socket.handshake.address || 'x');
+  const preAuthLimited = (limit, windowMs) => (fn) => async (data, cb) => {
+    if (!rateLimit('auth:' + ipKey, limit, windowMs)) {
+      return socket.emit('auth-error', { text: 'Слишком много попыток. Подождите минуту.' });
+    }
+    try { await fn(data || {}, cb); } catch (e) { console.error('[auth-handler]', e); socket.emit('auth-error', { text: 'Ошибка сервера' }); }
+  };
+
+  socket.on('message', limited(25, 10 * 1000, (uid) => 'msg:' + uid)(async (data) => {
     const userId = socket.data.userId;
     const u = await getUser(userId);
     if (!u) return;
@@ -487,9 +577,10 @@ io.on('connection', (socket) => {
         return socket.emit('error-msg', { text: byMe ? 'Пользователь заблокирован. Разблокируйте его.' : 'Вы заблокированы этим пользователем' });
       }
     }
-    const ts = data.timestamp || now();
+    // id и timestamp всегда генерирует сервер — клиенту нельзя доверять
+    const ts = now();
     const msg = {
-      id: data.id || uid('m'),
+      id: uid('m'),
       from: userId, fromName: u.name,
       to,
       text: String(data.text || '').slice(0, 4000),
@@ -988,12 +1079,17 @@ io.on('connection', (socket) => {
     const chatId = String((data && data.chatId) || '');
     const rec = data && data.record;
     if (!chatId || !rec || typeof rec !== 'object') return;
-    // разрешаем запись только участникам личного чата или комнаты
+    // Разрешаем запись ключа только участникам конкретного чата.
+    // Личный чат 'u_xxx': право имеет только сам владелец этого id (или вторая сторона диалога).
     const userId = socket.data.userId;
     let allowed = false;
-    if (chatId.indexOf('r_') === 0) allowed = inRoom(userId, await getRoom(chatId));
-    else if (chatId === 'public' || chatId === 'saved') allowed = true;
-    else allowed = !!(await getUser(chatId));
+    if (chatId.indexOf('r_') === 0) {
+      allowed = inRoom(userId, await getRoom(chatId));
+    } else if (chatId === 'public' || chatId === 'saved') {
+      allowed = true;
+    } else if (chatId.indexOf('u_') === 0) {
+      allowed = (userId === chatId); // приватный ключ личного чата пишет только его «хозяин»
+    }
     if (!allowed) return;
     const exists = await getEncKey(chatId);
     if (exists) return; // ключ устанавливается один раз (первым участником)
