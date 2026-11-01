@@ -21,8 +21,6 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { RateLimiterMemory } = require('rate-limiter-flexible');
-const FileType = require('file-type');
 const { Server } = require('socket.io');
 const { MongoClient } = require('mongodb');
 
@@ -52,23 +50,14 @@ const TOKEN_GRACE_MS = 60 * 1000;                // «продление» то�
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 
-// Секрет для подписи сессионных токенов (HMAC). В проде задаётся через env;
-// если не задан — генерируется временный (все сессии сбрасываются при рестарте).
-let SESSION_SECRET = process.env.SESSION_SECRET || '';
-if (!SESSION_SECRET) {
-  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
-  console.warn('[security] SESSION_SECRET не задан — использован временный секрет;' +
-    ' после рестарта сервиса всех пользователей разлогинит.' +
-    ' Сгенерируйте постоянный: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-}
-
-// Простой in-memory rate limiter (на IP/юзера), чтобы не тянуть лишних зависимостей.
-const rlBuckets = new Map(); // key -> { count, resetAt }
-function rateLimit(key, limit, windowMs) {
+// In-memory rate limiter для Socket.IO-событий и авторизации по IP
+// (HTTP-эндпоинты защищаются express-rate-limit — см. ниже).
+const evBuckets = new Map(); // key -> { count, resetAt }
+function evLimit(key, limit, windowMs) {
   const t = Date.now();
-  const b = rlBuckets.get(key);
+  const b = evBuckets.get(key);
   if (!b || b.resetAt <= t) {
-    rlBuckets.set(key, { count: 1, resetAt: t + windowMs });
+    evBuckets.set(key, { count: 1, resetAt: t + windowMs });
     return true;
   }
   if (b.count >= limit) return false;
@@ -77,11 +66,9 @@ function rateLimit(key, limit, windowMs) {
 }
 setInterval(() => {
   const t = Date.now();
-  for (const [k, v] of rlBuckets) if (v.resetAt <= t) rlBuckets.delete(k);
+  for (const [k, v] of evBuckets) if (v.resetAt <= t) evBuckets.delete(k);
 }, 60 * 1000).unref();
 
-// Время жизни сессии: 30 дней
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 let webpush = null;
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
   try {
@@ -271,11 +258,7 @@ const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders:
 
 // Socket.IO: лимиты по событиям на пользователя (in-memory, достаточно для одного инстанса)
 function makeLimiter(points, durationSec) {
-  const rl = new RateLimiterMemory({ points, duration: durationSec });
-  return async (key) => {
-    try { await rl.consume(key, 1); return true; }
-    catch (e) { return false; }
-  };
+  return async (key) => evLimit('ev:' + key, points, durationSec * 1000);
 }
 const rlMessage = makeLimiter(25, 10);   // 25 сообщений / 10 сек
 const rlAuth = makeLimiter(8, 60);       // 8 попыток входа / мин
@@ -331,7 +314,7 @@ app.use((_req, res, next) => {
 
 const ALLOWED_MIME = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|ogg|wav|mp4|webm|aac|m4a)|application\/(pdf|zip|x-zip-compressed|json)|text\/plain)$/;
 app.post('/upload', (req, res, next) => {
-  if (!rateLimit('up:' + (req.ip || 'x'), 30, 60 * 1000)) {
+  if (!evLimit('up:' + (req.ip || 'x'), 30, 60 * 1000)) {
     return res.status(429).json({ error: 'too many uploads' });
   }
   next();
@@ -712,8 +695,9 @@ io.on('connection', (socket) => {
       try { socket.emit('error-msg', { text: 'Внутренняя ошибка сервера' }); } catch (_) {}
     }
   };
+  // rate-limit обёртка для авторизованных событий (лимитчик на пользователя)
   const limited = (rl, fn) => auth(async (data, cb) => {
-    const ok = await rl(socket.data.userId || socket.id);
+    const ok = await rl(socket.data.userId);
     if (!ok) {
       if (typeof cb === 'function') { try { cb({ limited: true }); } catch (_) {} }
       return socket.emit('error-msg', { text: 'Слишком много действий — подождите немного' });
@@ -721,7 +705,19 @@ io.on('connection', (socket) => {
     return fn(data, cb);
   });
 
-  socket.on('register', limited(rlAuth, async (data = {}) => {
+  // защита от брутфорса авторизации (по IP сокета). ВАЖНО: register/login/auto-login
+  // исполняются ДО установки socket.data.userId — их нельзя пропускать через auth/limited,
+  // иначе сервер молча отбрасывает все попытки входа (регрессия «экран не реагирует»).
+  const ipKey = socket.handshake.address || 'x';
+  const preAuthLimited = (fn) => async (data, cb) => {
+    if (!evLimit('auth:' + ipKey, 8, 60 * 1000)) {
+      return socket.emit('auth-error', { text: 'Слишком много попыток. Подождите минуту.' });
+    }
+    try { await fn(data || {}, cb); }
+    catch (e) { console.error('[auth-handler]', e); socket.emit('auth-error', { text: 'Ошибка сервера' }); }
+  };
+
+  socket.on('register', preAuthLimited(async (data = {}) => {
     const name = String(data.name || '').trim().slice(0, 30);
     const username = String(data.username || '').trim().toLowerCase();
     const password = String(data.password || '');
@@ -754,7 +750,7 @@ io.on('connection', (socket) => {
     attachUser(userId, tok, true);
   }));
 
-  socket.on('login', limited(rlAuth, async (data = {}) => {
+  socket.on('login', preAuthLimited(async (data = {}) => {
     const username = String(data.username || '').trim().toLowerCase();
     const password = String(data.password || '');
     const userId = await getUserIdByUsername(username);
@@ -767,7 +763,7 @@ io.on('connection', (socket) => {
     attachUser(userId, tok, false);
   }));
 
-  socket.on('auto-login', limited(rlAuth, async (data = {}) => {
+  socket.on('auto-login', preAuthLimited(async (data = {}) => {
     const { token } = data;
     const owner = await sessionGet(token);
     if (!token || !owner) return socket.emit('auth-error', { text: 'Сессия истекла' });
@@ -789,31 +785,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // auth-обёртка: асинхронная, с перехватом ошибок + rate-limit на события
-  const auth = (fn) => async (data, cb) => {
-    if (!socket.data.userId) return;
-    try { await fn(data || {}, cb); } catch (e) { console.error('[handler]', e); }
-  };
-  const limited = (limit, windowMs, keyFn) => (fn) => async (data, cb) => {
-    if (!socket.data.userId) return;
-    const key = keyFn ? keyFn(socket.data.userId, data) : socket.data.userId;
-    if (!rateLimit('ev:' + key, limit, windowMs)) {
-      socket.emit('error-msg', { text: 'Слишком много действий — подождите немного' });
-      return;
-    }
-    try { await fn(data || {}, cb); } catch (e) { console.error('[handler]', e); }
-  };
-
-  // защита от брутфорса авторизации (по IP сокета)
-  const ipKey = (socket.handshake.address || 'x');
-  const preAuthLimited = (limit, windowMs) => (fn) => async (data, cb) => {
-    if (!rateLimit('auth:' + ipKey, limit, windowMs)) {
-      return socket.emit('auth-error', { text: 'Слишком много попыток. Подождите минуту.' });
-    }
-    try { await fn(data || {}, cb); } catch (e) { console.error('[auth-handler]', e); socket.emit('auth-error', { text: 'Ошибка сервера' }); }
-  };
-
-  socket.on('message', limited(25, 10 * 1000, (uid) => 'msg:' + uid)(async (data) => {
+  socket.on('message', limited(rlMessage, async (data) => {
     const userId = socket.data.userId;
     const u = await getUser(userId);
     if (!u) return;
